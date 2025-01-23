@@ -1,95 +1,95 @@
-use encoding_rs::Encoding;
-use ignore::Walk;
-use regex::Regex;
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    io::{self, BufRead},
-};
-
-lazy_static::lazy_static! {
-    static ref DEFAULT_IGNORE: Vec<&'static str> = vec![
-        "**/.git/**",
-        "**/node_modules/**",
-        "**/target/**",
-        "**/*.lock",
-        "**/*.bin",
-        "**/*.pdf",
-        "**/*.zip",
-    ];
-}
-
-#[derive(Debug)]
-pub struct Finding {
-    pub file: PathBuf,
-    pub line: usize,
-    pub pattern_name: String,
-    pub snippet: String,
-}
-
-pub struct Scanner {
-    patterns: Vec<(Regex, String)>,
-    ignore_patterns: Vec<String>,
-}
+use crate::config::{Config, EntropyConfig};
+use base64::Engine;
+use std::collections::HashSet;
 
 impl Scanner {
-    pub fn new() -> Self {
-        let mut ignore_patterns = DEFAULT_IGNORE.iter().map(|s| s.to_string()).collect();
-        
+    pub fn with_config(config: Config) -> Self {
+        let mut patterns = Vec::new();
+        let mut seen = HashSet::new();
+
+        // Add built-in patterns
+        for p in default_secret_patterns() {
+            seen.insert(p.name.clone());
+            patterns.push((
+                Regex::new(&p.pattern).unwrap(),
+                p.name,
+                p.description,
+            ));
+        }
+
+        // Add custom patterns
+        for p in config.patterns {
+            if !seen.contains(&p.name) {
+                patterns.push((
+                    Regex::new(&p.pattern).unwrap(),
+                    p.name,
+                    p.description,
+                ));
+            }
+        }
+
         Scanner {
-            patterns: SECRET_PATTERNS.iter()
-                .map(|(p, d)| (Regex::new(p).unwrap(), d.to_string()))
-                .collect(),
-            ignore_patterns,
+            patterns,
+            ignore_patterns: config.ignore,
+            entropy_config: config.entropy,
         }
     }
 
-    pub fn scan_directory(&self, path: &str) -> Vec<Finding> {
-        let mut findings = Vec::new();
+    fn check_entropy(&self, text: &str) -> bool {
+        if !self.entropy_config.enabled {
+            return false;
+        }
+        
+        let clean_text = text.replace(|c: char| !c.is_ascii_alphanumeric(), "");
+        if clean_text.len() < self.entropy_config.min_length {
+            return false;
+        }
 
-        for result in Walk::new(path)
-            .overrides(self.ignore_patterns.clone())
-            .filter_map(|e| e.ok()) 
-        {
-            let path = result.path();
-            if path.is_file() {
-                if let Some(file_findings) = self.scan_file(path) {
-                    findings.extend(file_findings);
-                }
+        let entropy = calculate_shannon_entropy(&clean_text);
+        entropy >= self.entropy_config.threshold
+    }
+
+    fn scan_line(&self, line: &str) -> Vec<(String, String)> {
+        let mut matches = Vec::new();
+        
+        // Regex matches
+        for (pattern, name, description) in &self.patterns {
+            if pattern.is_match(line) {
+                matches.push((name.clone(), description.clone()));
             }
         }
 
-        findings
-    }
-
-    fn scan_file(&self, path: &Path) -> Option<Vec<Finding>> {
-        let content = match fs::read(path) {
-            Ok(c) => c,
-            Err(_) => return None,
-        };
-
-        // Detect encoding
-        let (text, _, _) = Encoding::detect(&content).decode(&content);
-        
-        let mut findings = Vec::new();
-        
-        for (line_num, line) in text.lines().enumerate() {
-            for (pattern, pattern_name) in &self.patterns {
-                if pattern.is_match(line) {
-                    findings.push(Finding {
-                        file: path.to_path_buf(),
-                        line: line_num + 1,
-                        pattern_name: pattern_name.clone(),
-                        snippet: line.chars().take(50).collect(),
-                    });
-                }
-            }
+        // Entropy check
+        if self.check_entropy(line) {
+            matches.push((
+                "high-entropy-string".into(),
+                "High entropy string detected".into(),
+            ));
         }
 
-        if findings.is_empty() {
-            None
-        } else {
-            Some(findings)
-        }
+        matches
     }
+}
+
+fn calculate_shannon_entropy(s: &str) -> f64 {
+    let mut counts = [0u32; 256];
+    let length = s.len() as f64;
+    
+    for &b in s.as_bytes() {
+        counts[b as usize] += 1;
+    }
+
+    counts.iter()
+        .filter(|&&c| c > 0)
+        .map(|&c| {
+            let p = c as f64 / length;
+            -p * p.log2()
+        })
+        .sum()
+}
+
+// Add base64 detection
+fn is_base64(s: &str) -> bool {
+    let engine = base64::engine::general_purpose::STANDARD;
+    engine.decode(s.trim()).is_ok()
 }
