@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use crate::error::RedflagError;
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Config {
@@ -82,14 +83,13 @@ fn default_threshold() -> f64 { 3.5 }
 fn default_min_length() -> usize { 20 }
 
 impl Config {
-    pub fn load(path: Option<PathBuf>) -> Result<Self, anyhow::Error> {
-        let config_path = path.unwrap_or_else(|| PathBuf::from("redflag.toml"));
+    pub fn load(path: Option<PathBuf>) -> Result<Self, RedflagError> {
+        let config_path: PathBuf = path.unwrap_or_else(|| PathBuf::from("redflag.toml"));
         
-        if config_path.exists() {
-            let content = std::fs::read_to_string(config_path)?;
-            Ok(toml::from_str(&content)?)
-        } else {
-            Ok(Config::default())
-        }
+        let content = std::fs::read_to_string(config_path)
+            .map_err(|e| RedflagError::Config(e.to_string()))?;
+            
+        toml::from_str(&content)
+            .map_err(|e| RedflagError::Config(e.to_string()))
     }
 }

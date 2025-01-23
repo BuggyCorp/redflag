@@ -9,6 +9,7 @@ use crate::{
     error::RedflagError,
     scanner::Scanner
 };
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -47,8 +48,7 @@ fn run_scan(
     config_path: Option<PathBuf>,
     format: output::OutputFormat,
 ) -> Result<(), RedflagError> {
-    let config = Config::load(config_path)?;
-    let scanner = Scanner::with_config(config);
+    let config = Config::load(config_path)?;    let scanner = Scanner::with_config(config);
     let findings = scanner.scan_directory(&path);
 
     if !findings.is_empty() {

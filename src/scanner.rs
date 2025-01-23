@@ -10,6 +10,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
+use ignore::overrides::{Override, OverrideBuilder};
 
 #[derive(Debug, serde::Serialize)]
 pub struct Finding {
@@ -28,7 +29,7 @@ pub struct Scanner {
 
 impl Scanner {
     pub fn new() -> Result<Self, RedflagError> {
-        let config = Config::load(None).map_err(|e| RedflagError::Config(e.to_string()))?;
+        let config: Config = Config::load(None).map_err(|e| RedflagError::Config(e.to_string()))?;
         Ok(Self::with_config(config))
     }
 
@@ -74,13 +75,24 @@ impl Scanner {
 
     pub fn scan_directory(&self, path: &str) -> Vec<Finding> {
         let mut findings = Vec::new();
-        let mut walker = WalkBuilder::new(path);
+        let mut override_builder = OverrideBuilder::new(path);
         for pattern in &self.ignore_patterns {
-            if let Ok(ov) = Override::new(pattern) {
-                walker.add_override(ov);
+            if let Err(e) = override_builder.add(pattern) {
+                eprintln!("Invalid ignore pattern '{}': {}", pattern, e);
             }
         }
-        let walker = walker.build();
+        
+        let overrides = match override_builder.build() {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("Error building ignore patterns: {}", e);
+                return Vec::new();
+            }
+        };
+    
+        let walker = WalkBuilder::new(path)
+            .overrides(overrides)
+            .build();
 
         for entry in walker.filter_map(Result::ok) {
             let path = entry.path();

@@ -31,9 +31,6 @@ Usage
 
     # JSON output
     redflag scan --format json > results.json
-    
-    # SARIF for CI integration
-    redflag scan --format sarif > results.sarif
 
 Configuration
 -------------
