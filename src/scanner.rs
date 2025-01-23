@@ -13,7 +13,7 @@ impl Scanner {
         let config = Config::load(None)?;
         Ok(Self::with_config(config))
     }
-    
+
     pub fn with_config(config: Config) -> Self {
         let mut patterns = Vec::new();
         let mut seen = HashSet::new();
@@ -103,4 +103,25 @@ fn calculate_shannon_entropy(s: &str) -> f64 {
 fn is_base64(s: &str) -> bool {
     let engine = base64::engine::general_purpose::STANDARD;
     engine.decode(s.trim()).is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_entropy_calculation() {
+        let random = "KJHSDfkjh324kjhKJH234KJ2H34";
+        let low_entropy = "aaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        
+        assert!(calculate_shannon_entropy(random) > 4.0);
+        assert!(calculate_shannon_entropy(low_entropy) < 2.5);
+    }
+
+    #[test]
+    fn test_config_loading() {
+        let config = Config::load(Some("redflag.example.toml".into())).unwrap();
+        assert!(!config.patterns.is_empty());
+        assert!(config.entropy.enabled);
+    }
 }
