@@ -1,11 +1,14 @@
-use clap::{Parser, Subcommand};
-use redflag::{config::Config, error::RedflagError, output, scanner::Scanner};
-use std::path::PathBuf;
-
 mod config;
 mod error;
 mod output;
 mod scanner;
+
+use clap::{Parser, Subcommand};
+use crate::{
+    config::Config,
+    error::RedflagError,
+    scanner::Scanner
+};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]

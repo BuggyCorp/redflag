@@ -11,7 +11,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
 pub struct Finding {
     pub file: PathBuf,
     pub line: usize,
@@ -19,7 +19,6 @@ pub struct Finding {
     pub description: String,
     pub snippet: String,
 }
-
 pub struct Scanner {
     patterns: Vec<(Regex, String, String)>,
     ignore_patterns: Vec<String>,
@@ -29,7 +28,7 @@ pub struct Scanner {
 
 impl Scanner {
     pub fn new() -> Result<Self, RedflagError> {
-        let config = Config::load(None)?;
+        let config = Config::load(None).map_err(|e| RedflagError::Config(e.to_string()))?;
         Ok(Self::with_config(config))
     }
 
@@ -75,9 +74,13 @@ impl Scanner {
 
     pub fn scan_directory(&self, path: &str) -> Vec<Finding> {
         let mut findings = Vec::new();
-        let walker = WalkBuilder::new(path)
-            .overrides(self.ignore_patterns.iter().map(|s| s.as_str()))
-            .build();
+        let mut walker = WalkBuilder::new(path);
+        for pattern in &self.ignore_patterns {
+            if let Ok(ov) = Override::new(pattern) {
+                walker.add_override(ov);
+            }
+        }
+        let walker = walker.build();
 
         for entry in walker.filter_map(Result::ok) {
             let path = entry.path();
@@ -104,7 +107,7 @@ impl Scanner {
             Err(_) => return None,
         };
 
-        let (text, _, _) = Encoding::detect(&content).decode(&content);
+        let (text, _, _) = encoding_rs::UTF_8.decode(&content);
         let mut findings = Vec::new();
 
         for (line_num, line) in text.lines().enumerate() {
@@ -149,7 +152,7 @@ impl Scanner {
         if !self.entropy_config.enabled {
             return false;
         }
-        
+
         let clean_text = text.replace(|c: char| !c.is_ascii_alphanumeric(), "");
         if clean_text.len() < self.entropy_config.min_length {
             return false;
@@ -163,12 +166,13 @@ impl Scanner {
 fn calculate_shannon_entropy(s: &str) -> f64 {
     let mut counts = [0u32; 256];
     let length = s.len() as f64;
-    
+
     for &b in s.as_bytes() {
         counts[b as usize] += 1;
     }
 
-    counts.iter()
+    counts
+        .iter()
         .filter(|&&c| c > 0)
         .map(|&c| {
             let p = c as f64 / length;
@@ -190,7 +194,7 @@ mod tests {
     fn test_entropy_calculation() {
         let random = "KJHSDfkjh324kjhKJH234KJ2H34";
         let low_entropy = "aaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        
+
         assert!(calculate_shannon_entropy(random) > 4.0);
         assert!(calculate_shannon_entropy(low_entropy) < 2.5);
     }

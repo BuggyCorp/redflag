@@ -1,6 +1,5 @@
+use serde_sarif::sarif::{Sarif, Location, PhysicalLocation, ArtifactLocation, Region, Run, Tool, ToolComponent};
 use crate::scanner::Finding;
-use sarif_rs::{Artifact, Result, Sarif, Tool, ToolComponent};
-use serde_json::json;
 
 #[derive(clap::ValueEnum, Clone, Debug)]
 pub enum OutputFormat {
@@ -36,25 +35,24 @@ fn sarif_format(findings: &[Finding]) -> String {
     let mut results = Vec::new();
     
     for finding in findings {
-        results.push(Result::new()
-            .with_message(format!("Potential secret: {}", finding.pattern_name))
-            .with_locations(vec![sarif_rs::Location::new()
-                .with_physical_location(sarif_rs::PhysicalLocation::new()
-                    .with_artifact_location(sarif_rs::ArtifactLocation::new()
-                        .with_uri(finding.file.display().to_string()))
-                    .with_region(sarif_rs::Region::new()
-                        .with_start_line(finding.line as i64)))]) 
-        );
+        results.push(
+            serde_sarif::sarif::Result::new()
+                .with_message(format!("Potential secret: {}", finding.pattern_name))
+                .with_locations(vec![Location::new()
+                    .with_physical_location(PhysicalLocation::new()
+                        .with_artifact_location(ArtifactLocation::new()
+                            .with_uri(finding.file.display().to_string()))
+                        .with_region(Region::new()
+                            .with_start_line(finding.line as i64)))]));
     }
 
-    let sarif = Sarif::new()
+    Sarif::new()
         .with_version("2.1.0")
-        .with_runs(vec![sarif_rs::Run::new()
+        .with_runs(vec![Run::new()
             .with_tool(Tool::new()
                 .with_driver(ToolComponent::new()
                     .with_name("redflag")
                     .with_version(env!("CARGO_PKG_VERSION"))))
-            .with_results(results)]);
-
-    sarif.to_string_pretty().unwrap()
+            .with_results(results)])
+        .to_string()
 }

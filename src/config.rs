@@ -66,12 +66,12 @@ fn default_secret_patterns() -> Vec<SecretPattern> {
     vec![
         SecretPattern {
             name: "aws-access-key".to_string(),
-            pattern: r"(?i)aws_access_key_id\s*=\s*['\"]?[A-Z0-9/+=]{20}['\"]?".to_string(),
+            pattern: r#"(?i)aws_access_key_id\s*=\s*['"]?[A-Z0-9/+=]{20}['"]?"#.to_string(),
             description: "AWS Access Key ID".to_string(),
         },
         SecretPattern {
             name: "generic-api-key".to_string(),
-            pattern: r"(?i)(api|access)[_-]?key\s*=\s*['\"]?[A-Za-z0-9]{32,45}['\"]?".to_string(),
+            pattern: r#"(?i)(api|access)[_-]?key\s*=\s*['"]?[A-Za-z0-9]{32,45}['"]?"#.to_string(),
             description: "Generic API Key".to_string(),
         },
     ]
