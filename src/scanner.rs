@@ -14,6 +14,23 @@ impl Scanner {
         Ok(Self::with_config(config))
     }
 
+    fn should_scan_file(&self, path: &Path) -> bool {
+        let ext = path.extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+
+        self.config.extensions.iter()
+            .any(|e| e.to_lowercase() == ext)
+    }
+
+    pub fn scan_directory(&self, path: &str) -> Vec<Finding> {
+        // ...
+        if path.is_file() && self.should_scan_file(path) {
+            // scan
+        }
+    }
+
     pub fn with_config(config: Config) -> Self {
         let mut patterns = Vec::new();
         let mut seen = HashSet::new();
