@@ -2,7 +2,18 @@ use crate::config::{Config, EntropyConfig};
 use base64::Engine;
 use std::collections::HashSet;
 
+pub struct Scanner {
+    patterns: Vec<(Regex, String, String)>,
+    ignore_patterns: Vec<String>,
+    entropy_config: EntropyConfig,
+}
+
 impl Scanner {
+    pub fn new() -> Result<Self, RedflagError> {
+        let config = Config::load(None)?;
+        Ok(Self::with_config(config))
+    }
+    
     pub fn with_config(config: Config) -> Self {
         let mut patterns = Vec::new();
         let mut seen = HashSet::new();
