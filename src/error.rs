@@ -8,9 +8,27 @@ pub enum RedflagError {
     #[error("Configuration error: {0}")]
     Config(String),
     
-    #[error("Regex compilation error: {0}")]
+    #[error("Regex error: {0}")]
     Regex(#[from] regex::Error),
     
     #[error("Encoding error")]
     Encoding,
+    
+    #[error("Invalid path: {0}")]
+    PathError(String),
+    
+    #[error("Serialization error: {0}")]
+    Serialization(String),
+}
+
+impl From<toml::de::Error> for RedflagError {
+    fn from(e: toml::de::Error) -> Self {
+        RedflagError::Config(e.to_string())
+    }
+}
+
+impl From<toml::ser::Error> for RedflagError {
+    fn from(e: toml::ser::Error) -> Self {
+        RedflagError::Serialization(e.to_string())
+    }
 }

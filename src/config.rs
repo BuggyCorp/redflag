@@ -24,7 +24,7 @@ pub struct SecretPattern {
     pub description: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct EntropyConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -32,6 +32,16 @@ pub struct EntropyConfig {
     pub threshold: f64,
     #[serde(default = "default_min_length")]
     pub min_length: usize,
+}
+
+impl Default for EntropyConfig {
+    fn default() -> Self {
+        EntropyConfig {
+            enabled: default_true(),
+            threshold: default_threshold(),
+            min_length: default_min_length(),
+        }
+    }
 }
 
 fn default_extensions() -> Vec<String> {
@@ -44,25 +54,25 @@ fn default_extensions() -> Vec<String> {
 
 fn default_ignore_patterns() -> Vec<String> {
     vec![
-        "**/.git/**".into(),
-        "**/node_modules/**".into(),
-        "**/target/**".into(),
-        "**/*.lock".into(),
-        "**/*.bin".into(),
+        "**/.git/**".to_string(),
+        "**/node_modules/**".to_string(),
+        "**/target/**".to_string(),
+        "**/*.lock".to_string(),
+        "**/*.bin".to_string(),
     ]
 }
 
 fn default_secret_patterns() -> Vec<SecretPattern> {
     vec![
         SecretPattern {
-            name: "aws-access-key".into(),
-            pattern: r"(?i)aws_access_key_id\s*=\s*['\"]?[A-Z0-9/+=]{20}['\"]?".into(),
-            description: "AWS Access Key ID".into(),
+            name: "aws-access-key".to_string(),
+            pattern: r"(?i)aws_access_key_id\s*=\s*['\"]?[A-Z0-9/+=]{20}['\"]?".to_string(),
+            description: "AWS Access Key ID".to_string(),
         },
         SecretPattern {
-            name: "generic-api-key".into(),
-            pattern: r"(?i)(api|access)[_-]?key\s*=\s*['\"]?[A-Za-z0-9]{32,45}['\"]?".into(),
-            description: "Generic API Key".into(),
+            name: "generic-api-key".to_string(),
+            pattern: r"(?i)(api|access)[_-]?key\s*=\s*['\"]?[A-Za-z0-9]{32,45}['\"]?".to_string(),
+            description: "Generic API Key".to_string(),
         },
     ]
 }
@@ -73,8 +83,7 @@ fn default_min_length() -> usize { 20 }
 
 impl Config {
     pub fn load(path: Option<PathBuf>) -> Result<Self, anyhow::Error> {
-        let default_path = PathBuf::from("redflag.toml");
-        let config_path = path.or_else(|| Some(default_path)).unwrap();
+        let config_path = path.unwrap_or_else(|| PathBuf::from("redflag.toml"));
         
         if config_path.exists() {
             let content = std::fs::read_to_string(config_path)?;
