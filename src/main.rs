@@ -55,3 +55,19 @@ fn run_scan(path: String, _config: Option<String>) {
 
     exit(1);
 }
+
+#[derive(clap::ValueEnum, Clone, Debug)]
+enum OutputFormat {
+    Text,
+    Json,
+    Sarif,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    Scan {
+        // ...
+        #[arg(short, long, value_enum, default_value = "text")]
+        format: OutputFormat,
+    },
+}

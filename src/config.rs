@@ -11,6 +11,9 @@ pub struct Config {
     
     #[serde(default)]
     pub entropy: EntropyConfig,
+
+    #[serde(default = "default_extensions")]
+    pub extensions: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -29,6 +32,14 @@ pub struct EntropyConfig {
     pub threshold: f64,
     #[serde(default = "default_min_length")]
     pub min_length: usize,
+}
+
+fn default_extensions() -> Vec<String> {
+    vec![
+        "rs", "py", "js", "ts", "java", "go", 
+        "php", "rb", "sh", "yaml", "yml", "toml",
+        "env", "tf"
+    ].iter().map(|s| s.to_string()).collect()
 }
 
 fn default_ignore_patterns() -> Vec<String> {
