@@ -26,9 +26,3 @@ impl From<toml::de::Error> for RedflagError {
         RedflagError::Config(e.to_string())
     }
 }
-
-impl From<toml::ser::Error> for RedflagError {
-    fn from(e: toml::ser::Error) -> Self {
-        RedflagError::Serialization(e.to_string())
-    }
-}

@@ -1,12 +1,35 @@
-use crate::Finding;
+use crate::scanner::Finding;
 use sarif_rs::{Artifact, Result, Sarif, Tool, ToolComponent};
+use serde_json::json;
+
+#[derive(clap::ValueEnum, Clone, Debug)]
+pub enum OutputFormat {
+    Text,
+    Json,
+    Sarif,
+}
 
 pub fn format_findings(findings: &[Finding], format: OutputFormat) -> String {
     match format {
         OutputFormat::Text => text_format(findings),
-        OutputFormat::Json => serde_json::to_string_pretty(findings).unwrap(),
+        OutputFormat::Json => serde_json::to_string_pretty(&findings).unwrap(),
         OutputFormat::Sarif => sarif_format(findings),
     }
+}
+
+fn text_format(findings: &[Finding]) -> String {
+    let mut output = String::new();
+    for finding in findings {
+        output.push_str(&format!(
+            "{}:{} - {} - {}\nSnippet: {}\n\n",
+            finding.file.display(),
+            finding.line,
+            finding.pattern_name,
+            finding.description,
+            finding.snippet
+        ));
+    }
+    output
 }
 
 fn sarif_format(findings: &[Finding]) -> String {
