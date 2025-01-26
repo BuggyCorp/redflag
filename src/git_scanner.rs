@@ -220,7 +220,7 @@ mod tests {
 
     #[test]
     fn test_find_secret_in_history() {
-        let (dir, repo) = create_test_repo();
+        let (dir, _repo) = create_test_repo();
         let config = Config {
             patterns: vec![
                 SecretPattern {
@@ -245,7 +245,7 @@ mod tests {
 
     #[test]
     fn test_ignore_unconfigured_extensions() {
-        let (dir, repo) = create_test_repo();
+        let (dir, _repo) = create_test_repo();
         let config = Config {
             extensions: vec!["txt".to_string()], // Different from test repo's .env
             ..Config::default()

@@ -41,11 +41,6 @@ struct ExclusionRule {
 }
 
 impl Scanner {
-    pub fn new() -> Result<Self, RedflagError> {
-        let config = Config::load(None)?;
-        Ok(Self::with_config(config))
-    }
-
     pub fn with_config(config: Config) -> Self {
         let mut patterns = Vec::new();
         let mut seen = HashSet::new();
@@ -228,10 +223,6 @@ pub(crate) fn calculate_shannon_entropy(s: &str) -> f64 {
         .sum()
 }
 
-fn default_secret_patterns() -> Vec<SecretPattern> {
-    Config::default().patterns
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -271,25 +262,23 @@ mod tests {
     fn test_file_scanning() -> Result<(), RedflagError> {
         let dir = tempfile::tempdir()?;
         let file_path = dir.path().join("test_file.rs");
-
-        // Write a test file with a known secret pattern
+    
         fs::write(&file_path, r#"let api_key = "test_key_1234567890";"#)?;
-
-        // Create a scanner with a specific pattern for testing
+    
         let config = Config {
             patterns: vec![SecretPattern {
                 name: "test-key".to_string(),
                 pattern: r#"api_key\s*=\s*"test_key_\d{10}""#.to_string(),
                 description: "Test key pattern".to_string(),
             }],
-            extensions: vec!["rs".to_string()], // Ensure the file extension is included
+            extensions: vec!["rs".to_string()],
+            exclusions: vec![], // Clear default exclusions
             ..Config::default()
         };
-
+    
         let scanner = Scanner::with_config(config);
-
         let findings = scanner.scan_directory(dir.path().to_str().unwrap());
-
+    
         assert!(!findings.is_empty(), "No findings detected");
         Ok(())
     }
