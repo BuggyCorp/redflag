@@ -12,6 +12,7 @@ use crate::{
 };
 use std::path::PathBuf;
 use std::path::Path;
+use env_logger;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -41,6 +42,8 @@ enum Commands {
 }
 
 fn main() -> Result<(), RedflagError> {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
+
     let cli = Cli::parse();
     match cli.command {
         Commands::Scan { path, config, format, git_history } => run_scan(path, config, format, git_history),

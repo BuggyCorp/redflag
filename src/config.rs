@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use crate::error::RedflagError;
+use log::warn;
+
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct Config {
@@ -14,7 +16,7 @@ pub struct Config {
     pub entropy: EntropyConfig,
 
     #[serde(default = "default_extensions")]
-    pub extensions: Vec<String>,
+    pub extensions: Vec<String>
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -83,13 +85,53 @@ fn default_threshold() -> f64 { 3.5 }
 fn default_min_length() -> usize { 20 }
 
 impl Config {
-    pub fn load(path: Option<PathBuf>) -> Result<Self, RedflagError> {
-        let config_path: PathBuf = path.unwrap_or_else(|| PathBuf::from("redflag.toml"));
-        
-        let content = std::fs::read_to_string(config_path)
-            .map_err(|e| RedflagError::Config(e.to_string()))?;
-            
-        toml::from_str(&content)
-            .map_err(|e| RedflagError::Config(e.to_string()))
+    pub fn load(user_path: Option<PathBuf>) -> Result<Self, RedflagError> {
+        // Try user-specified config first
+        if let Some(path) = user_path {
+            if path.exists() {
+                let content = std::fs::read_to_string(&path)
+                    .map_err(|e| RedflagError::Config(format!("Failed to read config file {}: {}", path.display(), e)))?;
+                return toml::from_str(&content)
+                    .map_err(|e| RedflagError::Config(format!("Invalid config file {}: {}", path.display(), e)));
+            }
+            return Err(RedflagError::Config(format!("Config file not found: {}", path.display())));
+        }
+
+        // Try default locations
+        let default_paths = [
+            PathBuf::from("redflag.toml"),
+            PathBuf::from(".redflag.toml"),
+            PathBuf::from("config/redflag.toml"),
+        ];
+
+        for path in default_paths.iter() {
+            if path.exists() {
+                let content = std::fs::read_to_string(path)
+                    .map_err(|e| RedflagError::Config(format!("Failed to read config file {}: {}", path.display(), e)))?;
+                return toml::from_str(&content)
+                    .map_err(|e| RedflagError::Config(format!("Invalid config file {}: {}", path.display(), e)));
+            }
+        }
+
+        // Fallback to defaults with warning
+        warn!("No configuration file found. Using default settings.");
+        Ok(Config::default())
+    }
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Config {
+            ignore: default_ignore_patterns(),
+            patterns: default_secret_patterns(),
+            entropy: EntropyConfig::default(),
+            extensions: default_extensions(),
+            whitelist: vec![
+                WhitelistRule {
+                    path: PathBuf::from("docs/examples.conf"),
+                    reason: Some("Example configuration".to_string()),
+                }
+            ],
+        }
     }
 }

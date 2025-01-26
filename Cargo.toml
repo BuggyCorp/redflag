@@ -23,4 +23,6 @@ serde-sarif = { git = "https://github.com/psastras/sarif-rs" }
 chrono = "0.4"
 tempfile = "3.3"
 git2 = { version = "0.20.0", features = ["vendored-openssl"] }
-bstr = "1.9.0"  # Add this line
+bstr = "1.9.0"
+log = "0.4"
+env_logger = "0.11"

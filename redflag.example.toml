@@ -1,10 +1,9 @@
 [entropy]
 enabled = true
-threshold = 3.8  # Medium entropy threshold
-min_length = 24  # Minimum string length to check
+threshold = 3.8
+min_length = 24
 
-[ignore]
-patterns = [
+ignore = [
     "**/vendor/**",
     "**/tests/fixtures/**"
 ]
@@ -15,7 +14,7 @@ pattern = '''(?i)stripe_(secret|live)_key\s*=\s*['"]?(sk_(live|test)_[a-zA-Z0-9]
 description = "Stripe Secret Key"
 
 [[patterns]]
-name = "jwt-token"
+name = "jwt-token" 
 pattern = '''(?i)eyJ[a-zA-Z0-9_-]{5,}\.eyJ[a-zA-Z0-9_-]{5,}\.[a-zA-Z0-9_-]{10,}'''
 description = "JWT Token"
 
