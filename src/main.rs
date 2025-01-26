@@ -2,6 +2,7 @@ mod config;
 mod error;
 mod output;
 mod scanner;
+mod git_scanner;
 
 use clap::{Parser, Subcommand};
 use crate::{
