@@ -4,7 +4,8 @@ use std::path::Path;
 use regex::Regex;
 use crate::scanner::calculate_shannon_entropy;
 use bstr::ByteSlice;
-
+use crate::config::EntropyConfig;
+use crate::config::SecretPattern;
 
 pub fn scan_git_history(path: &Path, config: &Config) -> Vec<Finding> {
     let mut findings = Vec::new();
@@ -170,41 +171,50 @@ mod tests {
     fn create_test_repo() -> (tempfile::TempDir, Repository) {
         let dir = tempdir().unwrap();
         let repo = Repository::init(&dir).unwrap();
-        
-        // Configure test user
         let sig = Signature::now("Test User", "test@example.com").unwrap();
-        
-        // Initial commit
-        let mut index = repo.index().unwrap();
-        let config_file = dir.path().join("config.env");
-        let mut file = File::create(&config_file).unwrap();
-        writeln!(file, "API_KEY=test_123456789012345678901234").unwrap();
-        index.add_path(&Path::new("config.env")).unwrap();
-        let oid = index.write_tree().unwrap();
-        let tree = repo.find_tree(oid).unwrap();
-        repo.commit(
-            Some("HEAD"),
-            &sig,
-            &sig,
-            "Initial commit with secret",
-            &tree,
-            &[],
-        ).unwrap();
-
-        // Second commit removing the secret
-        fs::remove_file(&config_file).unwrap();
-        index.remove_path(&Path::new("config.env")).unwrap();
-        let oid = index.write_tree().unwrap();
-        let tree = repo.find_tree(oid).unwrap();
-        repo.commit(
-            Some("HEAD"),
-            &sig,
-            &sig,
-            "Remove secret",
-            &tree,
-            &[&repo.head().unwrap().peel_to_commit().unwrap()],
-        ).unwrap();
-
+    
+        // First commit
+        {
+            let mut index = repo.index().unwrap();
+            let config_file = dir.path().join("config.env");
+            File::create(&config_file).unwrap()
+                .write_all(b"API_KEY=test_123456789012345678901234").unwrap();
+            
+            index.add_path(Path::new("config.env")).unwrap();
+            let oid = index.write_tree().unwrap();
+            let tree = repo.find_tree(oid).unwrap();
+            
+            repo.commit(
+                Some("HEAD"),
+                &sig,
+                &sig,
+                "Initial commit",
+                &tree,
+                &[],
+            ).unwrap();
+        } // index and tree dropped here
+    
+        // Second commit
+        {
+            let mut index = repo.index().unwrap();
+            let config_file = dir.path().join("config.env");
+            fs::remove_file(&config_file).unwrap();
+            
+            index.remove_path(Path::new("config.env")).unwrap();
+            let oid = index.write_tree().unwrap();
+            let tree = repo.find_tree(oid).unwrap();
+            let parent = repo.head().unwrap().peel_to_commit().unwrap();
+            
+            repo.commit(
+                Some("HEAD"),
+                &sig,
+                &sig,
+                "Remove secret",
+                &tree,
+                &[&parent],
+            ).unwrap();
+        } // index, tree, and parent dropped here
+    
         (dir, repo)
     }
 
@@ -254,7 +264,7 @@ mod tests {
         // Create file with high entropy string
         let file_path = dir.path().join("creds.txt");
         let mut file = File::create(&file_path).unwrap();
-        writeln!(file, "password = \"dK3@9x!2sQ#mYp5vRtHw\"}").unwrap();
+        writeln!(file, "password = \"dK3@9x!2sQ#mYp5vRtHw}}\"").unwrap();
 
         // Commit the file
         let mut index = repo.index().unwrap();
