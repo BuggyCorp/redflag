@@ -3,10 +3,17 @@ enabled = true
 threshold = 3.8
 min_length = 24
 
-ignore = [
-    "**/vendor/**",
-    "**/tests/fixtures/**"
-]
+[[exclusions]]
+pattern = "**/node_modules/**"
+policy = "Ignore"
+
+[[exclusions]]
+pattern = "**/test-fixtures/**"
+policy = "ScanButAllow"
+
+[[exclusions]]
+pattern = "docs/examples/**"
+policy = "ScanButWarn"
 
 [[patterns]]
 name = "stripe-key"
@@ -17,6 +24,3 @@ description = "Stripe Secret Key"
 name = "jwt-token" 
 pattern = '''(?i)eyJ[a-zA-Z0-9_-]{5,}\.eyJ[a-zA-Z0-9_-]{5,}\.[a-zA-Z0-9_-]{10,}'''
 description = "JWT Token"
-
-[[whitelist]]
-path = "docs/examples.conf"

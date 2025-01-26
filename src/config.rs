@@ -3,12 +3,8 @@ use std::path::PathBuf;
 use crate::error::RedflagError;
 use log::warn;
 
-
-#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
-    #[serde(default = "default_ignore_patterns")]
-    pub ignore: Vec<String>,
-    
     #[serde(default = "default_secret_patterns")]
     pub patterns: Vec<SecretPattern>,
     
@@ -16,7 +12,31 @@ pub struct Config {
     pub entropy: EntropyConfig,
 
     #[serde(default = "default_extensions")]
-    pub extensions: Vec<String>
+    pub extensions: Vec<String>,
+
+    #[serde(default)]
+    pub exclusions: Vec<ExclusionRule>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub enum ExclusionPolicy {
+    Ignore,
+    ScanButAllow,
+    ScanButWarn,
+}
+
+impl Default for ExclusionPolicy {
+    fn default() -> Self {
+        ExclusionPolicy::Ignore
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ExclusionRule {
+    pub pattern: String,
+    
+    #[serde(default)]
+    pub policy: ExclusionPolicy,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -53,16 +73,6 @@ fn default_extensions() -> Vec<String> {
         "php", "rb", "sh", "yaml", "yml", "toml",
         "env", "tf"
     ].iter().map(|s| s.to_string()).collect()
-}
-
-fn default_ignore_patterns() -> Vec<String> {
-    vec![
-        "**/.git/**".to_string(),
-        "**/node_modules/**".to_string(),
-        "**/target/**".to_string(),
-        "**/*.lock".to_string(),
-        "**/*.bin".to_string(),
-    ]
 }
 
 fn default_secret_patterns() -> Vec<SecretPattern> {
@@ -122,15 +132,30 @@ impl Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            ignore: default_ignore_patterns(),
             patterns: default_secret_patterns(),
             entropy: EntropyConfig::default(),
             extensions: default_extensions(),
-            whitelist: vec![
-                WhitelistRule {
-                    path: PathBuf::from("docs/examples.conf"),
-                    reason: Some("Example configuration".to_string()),
-                }
+            exclusions: vec![
+                ExclusionRule {
+                    pattern: "**/.git/**".to_string(),
+                    policy: ExclusionPolicy::Ignore,
+                },
+                ExclusionRule {
+                    pattern: "**/node_modules/**".to_string(),
+                    policy: ExclusionPolicy::Ignore,
+                },
+                ExclusionRule {
+                    pattern: "**/target/**".to_string(),
+                    policy: ExclusionPolicy::Ignore,
+                },
+                ExclusionRule {
+                    pattern: "**/*.lock".to_string(),
+                    policy: ExclusionPolicy::Ignore,
+                },
+                ExclusionRule {
+                    pattern: "**/*.bin".to_string(),
+                    policy: ExclusionPolicy::Ignore,
+                },
             ],
         }
     }
