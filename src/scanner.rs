@@ -18,6 +18,12 @@ pub struct Finding {
     pub pattern_name: String,
     pub description: String,
     pub snippet: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commit_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commit_author: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commit_date: Option<String>,
 }
 pub struct Scanner {
     patterns: Vec<(Regex, String, String)>,

@@ -17,13 +17,26 @@ fn text_format(findings: &[Finding]) -> String {
     let mut output = String::new();
     for finding in findings {
         output.push_str(&format!(
-            "{}:{} - {} - {}\nSnippet: {}\n\n",
+            "{}:{} - {} - {}\nSnippet: {}{}\n\n",
             finding.file.display(),
             finding.line,
             finding.pattern_name,
             finding.description,
-            finding.snippet
+            finding.snippet,
+            commit_info(finding)
         ));
     }
     output
+}
+
+fn commit_info(finding: &Finding) -> String {
+    if let (Some(hash), Some(author), Some(date)) = (
+        &finding.commit_hash,
+        &finding.commit_author,
+        &finding.commit_date,
+    ) {
+        format!("\nCommit: {} ({}, {})", hash, author, date)
+    } else {
+        String::new()
+    }
 }

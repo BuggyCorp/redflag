@@ -30,6 +30,9 @@ enum Commands {
         
         #[arg(short, long, value_enum, default_value = "text")]
         format: output::OutputFormat,
+
+        #[arg(long)]
+        git_history: bool,
     },
     /// Install git pre-commit hook
     InstallHook,
@@ -38,7 +41,7 @@ enum Commands {
 fn main() -> Result<(), RedflagError> {
     let cli = Cli::parse();
     match cli.command {
-        Commands::Scan { path, config, format } => run_scan(path, config, format),
+        Commands::Scan { path, config, format, git_history } => run_scan(path, config, format, git_history),
         Commands::InstallHook => install_hook(),
     }
 }
@@ -47,9 +50,16 @@ fn run_scan(
     path: String,
     config_path: Option<PathBuf>,
     format: output::OutputFormat,
+    git_history: bool,
 ) -> Result<(), RedflagError> {
-    let config = Config::load(config_path)?;    let scanner = Scanner::with_config(config);
-    let findings = scanner.scan_directory(&path);
+    let config = Config::load(config_path)?;
+    let scanner = Scanner::with_config(config.clone());
+    
+    let findings = if git_history {
+        git_scanner::scan_git_history(Path::new(&path), &config)
+    } else {
+        scanner.scan_directory(&path)
+    };
 
     if !findings.is_empty() {
         println!("{}", output::format_findings(&findings, format));
