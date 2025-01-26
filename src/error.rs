@@ -10,15 +10,6 @@ pub enum RedflagError {
     
     #[error("Regex error: {0}")]
     Regex(#[from] regex::Error),
-    
-    #[error("Encoding error")]
-    Encoding,
-    
-    #[error("Invalid path: {0}")]
-    PathError(String),
-    
-    #[error("Serialization error: {0}")]
-    Serialization(String),
 }
 
 impl From<toml::de::Error> for RedflagError {
