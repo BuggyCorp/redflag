@@ -56,20 +56,22 @@ jobs:
   create-release:
     needs: [release-linux-windows, release-macos]
     if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write  # Add write permissions for releases
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: linux-windows-binaries
-          path: artifacts/linux-windows
+          path: target/x86_64-unknown-linux-gnu/release
       - uses: actions/download-artifact@v4
         with:
           name: macos-binary
-          path: artifacts/macos
+          path: target/x86_64-apple-darwin/release
       - uses: softprops/action-gh-release@v1
         with:
           files: |
-            artifacts/linux-windows/redflag
-            artifacts/linux-windows/redflag.exe
-            artifacts/macos/redflag
+            target/x86_64-unknown-linux-gnu/release/redflag
+            target/x86_64-unknown-linux-gnu/release/redflag.exe
+            target/x86_64-apple-darwin/release/redflag
