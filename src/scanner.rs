@@ -118,7 +118,7 @@ impl Scanner {
             .unwrap_or(false)
     }
 
-    fn scan_file(&self, path: &Path) -> Option<Vec<Finding>> {
+    pub(crate) fn scan_file(&self, path: &Path) -> Option<Vec<Finding>> {
         println!("Scanning file: {}", path.display());
     
         let content = match fs::read_to_string(path) {
@@ -146,6 +146,9 @@ impl Scanner {
                         pattern_name: name.clone(),
                         description: description.clone(),
                         snippet: line.chars().take(50).collect(),
+                        commit_hash: None,
+                        commit_author: None,
+                        commit_date: None,
                     });
                 }
             }
@@ -173,7 +176,7 @@ impl Scanner {
     }
 }
 
-fn calculate_shannon_entropy(s: &str) -> f64 {
+pub(crate) fn calculate_shannon_entropy(s: &str) -> f64 {
     if s.is_empty() {
         return 0.0;
     }

@@ -1,6 +1,10 @@
 use git2::{Commit, DiffOptions, Repository, Tree};
 use crate::{config::Config, scanner::Finding};
 use std::path::Path;
+use regex::Regex;
+use crate::scanner::calculate_shannon_entropy;
+use bstr::ByteSlice;
+
 
 pub fn scan_git_history(path: &Path, config: &Config) -> Vec<Finding> {
     let mut findings = Vec::new();
@@ -62,7 +66,7 @@ fn analyze_diff(
     if let Ok(diff) = repo.diff_tree_to_tree(old_tree, new_tree, Some(&mut diff_options)) {
         let _ = diff.foreach(&mut |delta, _| {
             if let Some(new_file) = delta.new_file().path() {
-                process_file_diff(delta, commit, config, findings, new_file);
+                process_file_diff(repo, delta, commit, config, findings, new_file);
             }
             true
         }, None, None, None);
@@ -70,6 +74,7 @@ fn analyze_diff(
 }
 
 fn process_file_diff(
+    repo: &Repository,
     delta: git2::DiffDelta<'_>,
     commit: &Commit,
     config: &Config,
@@ -86,10 +91,9 @@ fn process_file_diff(
 
     let patch = delta.new_file().id();
     if let Ok(blob) = repo.find_blob(patch) {
-        if let Some(content) = blob.content().to_str().ok() {
-            for (line_num, line) in content.lines().enumerate() {
-                check_line(line, line_num + 1, file_path, commit, config, findings);
-            }
+        let content = blob.content().to_str_lossy();
+        for (line_num, line) in content.lines().enumerate() {
+            check_line(line, line_num + 1, file_path, commit, config, findings);
         }
     }
 }
@@ -152,5 +156,132 @@ fn create_finding(
         commit_hash: Some(commit.id().to_string()),
         commit_author: Some(commit.author().to_string()),
         commit_date: Some(commit.time().seconds().to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use git2::{Repository, Signature};
+    use std::fs::{self, File};
+    use std::io::Write;
+    use tempfile::tempdir;
+
+    fn create_test_repo() -> (tempfile::TempDir, Repository) {
+        let dir = tempdir().unwrap();
+        let repo = Repository::init(&dir).unwrap();
+        
+        // Configure test user
+        let sig = Signature::now("Test User", "test@example.com").unwrap();
+        
+        // Initial commit
+        let mut index = repo.index().unwrap();
+        let config_file = dir.path().join("config.env");
+        let mut file = File::create(&config_file).unwrap();
+        writeln!(file, "API_KEY=test_123456789012345678901234").unwrap();
+        index.add_path(&Path::new("config.env")).unwrap();
+        let oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(oid).unwrap();
+        repo.commit(
+            Some("HEAD"),
+            &sig,
+            &sig,
+            "Initial commit with secret",
+            &tree,
+            &[],
+        ).unwrap();
+
+        // Second commit removing the secret
+        fs::remove_file(&config_file).unwrap();
+        index.remove_path(&Path::new("config.env")).unwrap();
+        let oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(oid).unwrap();
+        repo.commit(
+            Some("HEAD"),
+            &sig,
+            &sig,
+            "Remove secret",
+            &tree,
+            &[&repo.head().unwrap().peel_to_commit().unwrap()],
+        ).unwrap();
+
+        (dir, repo)
+    }
+
+    #[test]
+    fn test_find_secret_in_history() {
+        let (dir, repo) = create_test_repo();
+        let config = Config {
+            patterns: vec![
+                SecretPattern {
+                    name: "test-api-key".to_string(),
+                    pattern: r#"API_KEY=\w{28}"#.to_string(),
+                    description: "Test API key pattern".to_string(),
+                }
+            ],
+            extensions: vec!["env".to_string()],
+            ..Config::default()
+        };
+
+        let findings = scan_git_history(dir.path(), &config);
+        
+        assert!(!findings.is_empty(), "No findings detected");
+        let secret_finding = &findings[0];
+        assert_eq!(secret_finding.pattern_name, "test-api-key");
+        assert!(secret_finding.commit_hash.is_some());
+        assert!(secret_finding.commit_author.as_ref().unwrap().contains("Test User"));
+        assert_eq!(secret_finding.file, Path::new("config.env"));
+    }
+
+    #[test]
+    fn test_ignore_unconfigured_extensions() {
+        let (dir, repo) = create_test_repo();
+        let config = Config {
+            extensions: vec!["txt".to_string()], // Different from test repo's .env
+            ..Config::default()
+        };
+
+        let findings = scan_git_history(dir.path(), &config);
+        assert!(findings.is_empty(), "Found secrets in ignored extension");
+    }
+
+    #[test]
+    fn test_entropy_detection_in_history() {
+        let dir = tempdir().unwrap();
+        let repo = Repository::init(&dir).unwrap();
+        let sig = Signature::now("Test User", "test@example.com").unwrap();
+
+        // Create file with high entropy string
+        let file_path = dir.path().join("creds.txt");
+        let mut file = File::create(&file_path).unwrap();
+        writeln!(file, "password = \"dK3@9x!2sQ#mYp5vRtHw\"}").unwrap();
+
+        // Commit the file
+        let mut index = repo.index().unwrap();
+        index.add_path(&Path::new("creds.txt")).unwrap();
+        let oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(oid).unwrap();
+        repo.commit(
+            Some("HEAD"),
+            &sig,
+            &sig,
+            "Add high entropy password",
+            &tree,
+            &[],
+        ).unwrap();
+
+        let config = Config {
+            entropy: EntropyConfig {
+                enabled: true,
+                threshold: 3.5,
+                min_length: 12,
+            },
+            extensions: vec!["txt".to_string()],
+            ..Config::default()
+        };
+
+        let findings = scan_git_history(dir.path(), &config);
+        assert!(!findings.is_empty(), "No entropy findings detected");
+        assert_eq!(findings[0].pattern_name, "high-entropy");
     }
 }

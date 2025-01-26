@@ -11,6 +11,7 @@ use crate::{
     scanner::Scanner
 };
 use std::path::PathBuf;
+use std::path::Path;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use crate::error::RedflagError;
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct Config {
     #[serde(default = "default_ignore_patterns")]
     pub ignore: Vec<String>,
@@ -17,7 +17,7 @@ pub struct Config {
     pub extensions: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SecretPattern {
     pub name: String,
     pub pattern: String,
@@ -25,7 +25,7 @@ pub struct SecretPattern {
     pub description: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct EntropyConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
