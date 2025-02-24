@@ -51,6 +51,11 @@ enum Commands {
     },
     /// Install git pre-commit hook
     InstallHook,
+    /// Generate default configuration file
+    GenerateConfig {
+        #[arg(default_value = "redflag.toml")]
+        path: PathBuf,
+    },
 }
 
 fn main() -> Result<(), RedflagError> {
@@ -58,8 +63,10 @@ fn main() -> Result<(), RedflagError> {
 
     let cli = Cli::parse();
     match cli.command {
-        Commands::Scan { path, config, format, git_history, git_max_depth, git_since, git_until, git_branches } => run_scan(path, config, format, git_history, GitScanOptions { max_depth: git_max_depth, branches: git_branches, since_date: git_since, until_date: git_until }),
+        Commands::Scan { path, config, format, git_history, git_max_depth, git_since, git_until, git_branches } => 
+            run_scan(path, config, format, git_history, GitScanOptions { max_depth: git_max_depth, branches: git_branches, since_date: git_since, until_date: git_until }),
         Commands::InstallHook => install_hook(),
+        Commands::GenerateConfig { path } => generate_default_config(&path),
     }
 }
 
@@ -122,4 +129,8 @@ exit $?
     std::fs::write(hook_path, HOOK_CONTENT)?;
     println!("Pre-commit hook installed successfully");
     Ok(())
+}
+
+fn generate_default_config(path: &PathBuf) -> Result<(), RedflagError> {
+    Config::generate_default_config(path)
 }

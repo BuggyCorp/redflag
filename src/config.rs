@@ -1,13 +1,19 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::fs;
+use once_cell::sync::Lazy;
 use crate::error::RedflagError;
 use log::warn;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
+    #[serde(default = "default_patterns")]
     pub patterns: Vec<SecretPattern>,
+    #[serde(default = "default_extensions")]
     pub extensions: Vec<String>,
+    #[serde(default = "default_exclusions")]
     pub exclusions: Vec<ExclusionRule>,
+    #[serde(default)]
     pub entropy: EntropyConfig,
     #[serde(default)]
     pub git: GitConfig,
@@ -25,11 +31,11 @@ pub struct GitConfig {
     pub until_date: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
 pub enum ExclusionPolicy {
     Ignore,
-    ScanButAllow,
     ScanButWarn,
+    ScanButAllow,
 }
 
 impl Default for ExclusionPolicy {
@@ -38,19 +44,16 @@ impl Default for ExclusionPolicy {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ExclusionRule {
     pub pattern: String,
-    
-    #[serde(default)]
     pub policy: ExclusionPolicy,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SecretPattern {
     pub name: String,
     pub pattern: String,
-    #[serde(default)]
     pub description: String,
 }
 
@@ -74,25 +77,121 @@ impl Default for EntropyConfig {
     }
 }
 
-fn default_extensions() -> Vec<String> {
-    vec![
-        "rs", "py", "js", "ts", "java", "go", 
-        "php", "rb", "sh", "yaml", "yml", "toml",
-        "env", "tf"
-    ].iter().map(|s| s.to_string()).collect()
-}
-
-fn default_secret_patterns() -> Vec<SecretPattern> {
+static DEFAULT_PATTERNS: Lazy<Vec<SecretPattern>> = Lazy::new(|| {
     vec![
         SecretPattern {
-            name: "aws-access-key".to_string(),
-            pattern: r#"(?i)aws_access_key_id\s*=\s*['"]?[A-Z0-9/+=]{20}['"]?"#.to_string(),
-            description: "AWS Access Key ID".to_string(),
+            name: "AWS Access Key".to_string(),
+            pattern: r"(?i)(AWS|AMAZON)_?(ACCESS|SECRET)?_?(KEY)?_?ID\s*=?\s*[A-Z0-9]{20}".to_string(),
+            description: "AWS Access Key ID detected".to_string(),
         },
         SecretPattern {
-            name: "generic-api-key".to_string(),
-            pattern: r#"(?i)(api|access)[_-]?key\s*=\s*['"]?[A-Za-z0-9]{32,45}['"]?"#.to_string(),
-            description: "Generic API Key".to_string(),
+            name: "AWS Secret Key".to_string(),
+            pattern: r"(?i)(AWS|AMAZON)_?(ACCESS|SECRET)?_?(KEY)?\s*=?\s*[A-Za-z0-9/+=]{40}".to_string(),
+            description: "AWS Secret Access Key detected".to_string(),
+        },
+        SecretPattern {
+            name: "GitHub Token".to_string(),
+            pattern: r"(?i)github[_\-\s]*(pat|token|key)\s*=?\s*gh[pousr]_[a-zA-Z0-9]{36}".to_string(),
+            description: "GitHub Personal Access Token detected".to_string(),
+        },
+        SecretPattern {
+            name: "Generic API Key".to_string(),
+            pattern: r"(?i)api[_\-\s]*key\s*=?\s*['"][a-zA-Z0-9]{32,}['"]".to_string(),
+            description: "Generic API key detected".to_string(),
+        },
+        SecretPattern {
+            name: "Private Key".to_string(),
+            pattern: r"-----BEGIN\s+(RSA|DSA|EC|OPENSSH)\s+PRIVATE\s+KEY(\s+ENCRYPTED)?-----".to_string(),
+            description: "Private key file detected".to_string(),
+        },
+        SecretPattern {
+            name: "Password Assignment".to_string(),
+            pattern: r"(?i)(password|passwd|pwd)\s*=\s*['"][^'\"]{8,}['"]".to_string(),
+            description: "Possible hardcoded password".to_string(),
+        },
+        SecretPattern {
+            name: "Database Connection String".to_string(),
+            pattern: r"(?i)(mongodb|postgresql|mysql)://[^\s<>'\"]+".to_string(),
+            description: "Database connection string detected".to_string(),
+        },
+        SecretPattern {
+            name: "JWT Token".to_string(),
+            pattern: r"eyJ[A-Za-z0-9-_=]+\.[A-Za-z0-9-_=]+\.?[A-Za-z0-9-_.+/=]*".to_string(),
+            description: "JWT token detected".to_string(),
+        },
+    ]
+});
+
+fn default_patterns() -> Vec<SecretPattern> {
+    DEFAULT_PATTERNS.clone()
+}
+
+fn default_extensions() -> Vec<String> {
+    vec![
+        "php".to_string(),
+        "js".to_string(),
+        "ts".to_string(),
+        "jsx".to_string(),
+        "tsx".to_string(),
+        "py".to_string(),
+        "rb".to_string(),
+        "java".to_string(),
+        "go".to_string(),
+        "rs".to_string(),
+        "cs".to_string(),
+        "cpp".to_string(),
+        "c".to_string(),
+        "h".to_string(),
+        "hpp".to_string(),
+        "xml".to_string(),
+        "yaml".to_string(),
+        "yml".to_string(),
+        "json".to_string(),
+        "config".to_string(),
+        "conf".to_string(),
+        "ini".to_string(),
+        "env".to_string(),
+        "properties".to_string(),
+        "toml".to_string(),
+        "sql".to_string(),
+        "md".to_string(),
+        "txt".to_string(),
+    ]
+}
+
+fn default_exclusions() -> Vec<ExclusionRule> {
+    vec![
+        ExclusionRule {
+            pattern: "**/node_modules/**".to_string(),
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/vendor/**".to_string(),
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/.git/**".to_string(),
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/target/**".to_string(),
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/dist/**".to_string(),
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/*.min.js".to_string(),
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/*.test.*".to_string(),
+            policy: ExclusionPolicy::ScanButWarn,
+        },
+        ExclusionRule {
+            pattern: "**/*.spec.*".to_string(),
+            policy: ExclusionPolicy::ScanButWarn,
         },
     ]
 }
@@ -117,68 +216,52 @@ impl Default for GitConfig {
 }
 
 impl Config {
-    pub fn load(user_path: Option<PathBuf>) -> Result<Self, RedflagError> {
-        // Try user-specified config first
-        if let Some(path) = user_path {
-            if path.exists() {
-                let content = std::fs::read_to_string(&path)
-                    .map_err(|e| RedflagError::Config(format!("Failed to read config file {}: {}", path.display(), e)))?;
-                return toml::from_str(&content)
-                    .map_err(|e| RedflagError::Config(format!("Invalid config file {}: {}", path.display(), e)));
+    pub fn load(path: Option<PathBuf>) -> Result<Self, RedflagError> {
+        let mut config = Config::default();
+
+        if let Some(config_path) = path {
+            let user_config: Config = toml::from_str(&fs::read_to_string(config_path)?)?;
+            
+            // Merge user config with defaults
+            config.patterns.extend(user_config.patterns);
+            config.extensions.extend(user_config.extensions);
+            config.exclusions.extend(user_config.exclusions);
+            
+            // Override entropy and git configs if specified
+            if user_config.entropy.enabled {
+                config.entropy = user_config.entropy;
             }
-            return Err(RedflagError::Config(format!("Config file not found: {}", path.display())));
-        }
-
-        // Try default locations
-        let default_paths = [
-            PathBuf::from("redflag.toml"),
-            PathBuf::from(".redflag.toml"),
-            PathBuf::from("config/redflag.toml"),
-        ];
-
-        for path in default_paths.iter() {
-            if path.exists() {
-                let content = std::fs::read_to_string(path)
-                    .map_err(|e| RedflagError::Config(format!("Failed to read config file {}: {}", path.display(), e)))?;
-                return toml::from_str(&content)
-                    .map_err(|e| RedflagError::Config(format!("Invalid config file {}: {}", path.display(), e)));
+            if user_config.git.max_depth != default_max_depth() || 
+               !user_config.git.branches.is_empty() ||
+               user_config.git.since_date.is_some() ||
+               user_config.git.until_date.is_some() {
+                config.git = user_config.git;
             }
         }
 
-        // Fallback to defaults with warning
-        warn!("No configuration file found. Using default settings.");
-        Ok(Config::default())
+        Ok(config)
     }
+
+    pub fn save(&self, path: &PathBuf) -> Result<(), RedflagError> {
+        let content = toml::to_string_pretty(self)?;
+        fs::write(path, content)?;
+        Ok(())
+    }
+}
+
+// Add a command to generate a default config file
+pub fn generate_default_config(path: &PathBuf) -> Result<(), RedflagError> {
+    let config = Config::default();
+    config.save(path)
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Config {
-            patterns: default_secret_patterns(),
-            entropy: EntropyConfig::default(),
+        Self {
+            patterns: default_patterns(),
             extensions: default_extensions(),
-            exclusions: vec![
-                ExclusionRule {
-                    pattern: "**/.git/**".to_string(),
-                    policy: ExclusionPolicy::Ignore,
-                },
-                ExclusionRule {
-                    pattern: "**/node_modules/**".to_string(),
-                    policy: ExclusionPolicy::Ignore,
-                },
-                ExclusionRule {
-                    pattern: "**/target/**".to_string(),
-                    policy: ExclusionPolicy::Ignore,
-                },
-                ExclusionRule {
-                    pattern: "**/*.lock".to_string(),
-                    policy: ExclusionPolicy::Ignore,
-                },
-                ExclusionRule {
-                    pattern: "**/*.bin".to_string(),
-                    policy: ExclusionPolicy::Ignore,
-                },
-            ],
+            exclusions: default_exclusions(),
+            entropy: EntropyConfig::default(),
             git: GitConfig::default(),
         }
     }
