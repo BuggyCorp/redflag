@@ -1,4 +1,5 @@
 use thiserror::Error;
+use indicatif::style::TemplateError;
 
 #[derive(Error, Debug)]
 pub enum RedflagError {
@@ -13,10 +14,25 @@ pub enum RedflagError {
     
     #[error("Git error: {0}")]
     Git(#[from] git2::Error),
+
+    #[error("Template error: {0}")]
+    Template(String),
 }
 
 impl From<toml::de::Error> for RedflagError {
     fn from(e: toml::de::Error) -> Self {
         RedflagError::Config(e.to_string())
+    }
+}
+
+impl From<toml::ser::Error> for RedflagError {
+    fn from(e: toml::ser::Error) -> Self {
+        RedflagError::Config(e.to_string())
+    }
+}
+
+impl From<TemplateError> for RedflagError {
+    fn from(e: TemplateError) -> Self {
+        RedflagError::Template(e.to_string())
     }
 }

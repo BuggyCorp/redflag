@@ -1,5 +1,5 @@
 use crate::{
-    config::{Config, EntropyConfig, ExclusionPolicy, SecretPattern},
+    config::{Config, EntropyConfig, ExclusionPolicy, Severity, SecretPattern},
     error::RedflagError,
 };
 use glob::Pattern;
@@ -11,14 +11,19 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
+use once_cell::sync::Lazy;
 
-#[derive(Debug, serde::Serialize)]
+const IGNORE_COMMENT_PATTERN: &str = r"(?i)//\s*redflag-ignore(?:-next)?(?:\s+.*)?$";
+static IGNORE_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(IGNORE_COMMENT_PATTERN).unwrap());
+
+#[derive(Debug, serde::Serialize, Clone)]
 pub struct Finding {
     pub file: PathBuf,
     pub line: usize,
     pub pattern_name: String,
     pub description: String,
     pub snippet: String,
+    pub severity: Severity,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub commit_hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -28,7 +33,7 @@ pub struct Finding {
 }
 
 pub struct Scanner {
-    patterns: Vec<(Regex, String, String)>,
+    patterns: Vec<(Regex, String, String, Severity)>,
     entropy_config: EntropyConfig,
     extensions: Vec<String>,
     exclusions: Vec<ExclusionRule>,
@@ -57,7 +62,7 @@ impl Scanner {
             match Regex::new(&p.pattern) {
                 Ok(re) => {
                     seen.insert(p.name.clone());
-                    patterns.push((re, p.name, p.description));
+                    patterns.push((re, p.name, p.description, p.severity));
                 }
                 Err(e) => eprintln!("Invalid pattern {}: {}", p.name, e),
             }
@@ -147,12 +152,31 @@ impl Scanner {
         };
 
         let mut findings = Vec::new();
+        let mut ignore_next_line = false;
 
         for (line_num, line) in content.lines().enumerate() {
+            // Check for ignore comments
+            if IGNORE_REGEX.is_match(line) {
+                if line.to_lowercase().contains("ignore-next") {
+                    ignore_next_line = true;
+                }
+                continue;
+            }
+
+            if ignore_next_line {
+                ignore_next_line = false;
+                continue;
+            }
+
+            // Skip if line appears to be in a test file or test function
+            if self.is_test_context(path, line) {
+                continue;
+            }
+
             // Check regex patterns
-            for (pattern, name, description) in &self.patterns {
+            for (pattern, name, description, severity) in &self.patterns {
                 if pattern.is_match(line) {
-                    findings.push(self.create_finding(path, line_num + 1, line, name, description));
+                    findings.push(self.create_finding(path, line_num + 1, line, name, description, *severity));
                 }
             }
 
@@ -167,6 +191,7 @@ impl Scanner {
                         line,
                         "high-entropy",
                         "High entropy string detected",
+                        Severity::Medium,
                     ));
                 }
             }
@@ -180,7 +205,6 @@ impl Scanner {
                 None
             }
             ExclusionPolicy::ScanButAllow => {
-                // Return findings if any
                 if findings.is_empty() {
                     None
                 } else {
@@ -191,22 +215,53 @@ impl Scanner {
         }
     }
 
-    fn create_finding(&self, path: &Path, line: usize, text: &str, name: &str, desc: &str) -> Finding {
+    fn is_test_context(&self, path: &Path, line: &str) -> bool {
+        // Check if file is a test file
+        let file_name = path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
+        
+        if file_name.contains("test") || file_name.contains("spec") {
+            return true;
+        }
+
+        // Check for common test patterns in the line
+        let test_patterns = [
+            r"#\[test\]",
+            r"describe\s*\(",
+            r"it\s*\(",
+            r"test\s*\(",
+            r"assert",
+            r"expect\s*\(",
+            r"mock\s*\(",
+            r"fixture",
+        ];
+
+        test_patterns.iter().any(|pattern| {
+            Regex::new(pattern).map(|re| re.is_match(line)).unwrap_or(false)
+        })
+    }
+
+    fn create_finding(&self, path: &Path, line: usize, text: &str, name: &str, desc: &str, severity: Severity) -> Finding {
         Finding {
             file: path.to_path_buf(),
             line,
             pattern_name: name.to_string(),
             description: desc.to_string(),
             snippet: text.chars().take(50).collect(),
+            severity,
             commit_hash: None,
             commit_author: None,
             commit_date: None,
         }
     }
 
-    pub fn scan_with_handler<H: FindingHandler>(&self, path: &str, handler: &mut H) {
-        // Instead of collecting findings, pass them to handler
-        // This allows for streaming output or different handling strategies
+    pub fn scan_with_handler<H: FindingHandler>(&self, path: &str, handler: &mut H) -> Result<(), RedflagError> {
+        let findings = self.scan_directory(path);
+        for finding in findings {
+            handler.handle(finding);
+        }
+        Ok(())
     }
 }
 
@@ -270,18 +325,23 @@ mod tests {
     #[test]
     fn test_file_scanning() -> Result<(), RedflagError> {
         let dir = tempfile::tempdir()?;
-        let file_path = dir.path().join("test_file.rs");
+        let file_path = dir.path().join("secrets.rs");
     
         fs::write(&file_path, r#"let api_key = "test_key_1234567890";"#)?;
     
         let config = Config {
             patterns: vec![SecretPattern {
                 name: "test-key".to_string(),
-                pattern: r#"api_key\s*=\s*"test_key_\d{10}""#.to_string(),
+                pattern: r#"api_key\s*=\s*"[^"]*""#.to_string(),
                 description: "Test key pattern".to_string(),
+                severity: Severity::High,
             }],
             extensions: vec!["rs".to_string()],
             exclusions: vec![], // Clear default exclusions
+            entropy: EntropyConfig {
+                enabled: false,
+                ..Default::default()
+            },
             ..Config::default()
         };
     

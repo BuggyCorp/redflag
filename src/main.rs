@@ -8,7 +8,8 @@ use clap::{Parser, Subcommand};
 use crate::{
     config::Config,
     error::RedflagError,
-    scanner::Scanner
+    scanner::Scanner,
+    output::OutputHandler
 };
 use std::path::PathBuf;
 use std::path::Path;

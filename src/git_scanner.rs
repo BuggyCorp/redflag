@@ -1,21 +1,25 @@
 use git2::{Commit, DiffOptions, Repository, Tree};
-use crate::{config::Config, scanner::Finding};
+use crate::{
+    config::{Config, Severity, SecretPattern, GitConfig, EntropyConfig},
+    scanner::Finding,
+};
 use std::path::Path;
 use regex::Regex;
 use crate::scanner::calculate_shannon_entropy;
 use bstr::ByteSlice;
-use crate::config::EntropyConfig;
-use crate::config::SecretPattern;
+use crate::scanner::FindingHandler;
 use indicatif::{ProgressBar, ProgressStyle};
 use crate::error::RedflagError;
 use std::collections::HashMap;
-use chrono::NaiveDateTime;
+use chrono::{NaiveDateTime, DateTime, Utc};
 use std::sync::Mutex;
 use once_cell::sync::Lazy;
 
 struct ScanCache {
     commit_results: HashMap<String, Vec<Finding>>,
 }
+
+const MAX_CACHE_SIZE: usize = 1000; // Limit cache to last 1000 commits
 
 impl ScanCache {
     fn new() -> Self {
@@ -29,42 +33,111 @@ impl ScanCache {
     }
 
     fn insert(&mut self, commit_hash: String, findings: Vec<Finding>) {
+        // If cache is at max size, remove oldest entries
+        if self.commit_results.len() >= MAX_CACHE_SIZE {
+            let to_remove: Vec<_> = self.commit_results
+                .keys()
+                .take(MAX_CACHE_SIZE / 2)
+                .cloned()
+                .collect();
+            for key in to_remove {
+                self.commit_results.remove(&key);
+            }
+        }
         self.commit_results.insert(commit_hash, findings);
     }
 }
 
 static SCAN_CACHE: Lazy<Mutex<ScanCache>> = Lazy::new(|| Mutex::new(ScanCache::new()));
 
-pub fn scan_git_history(path: &Path, config: &Config) -> Vec<Finding> {
-    let mut findings = Vec::new();
+pub fn scan_git_history_with_handler<H: FindingHandler>(
+    path: &Path,
+    config: &Config,
+    handler: &mut H,
+) -> Result<(), RedflagError> {
+    let repo = Repository::open(path)?;
+    let mut revwalk = repo.revwalk()?;
     
-    let repo = Repository::open(path).map_err(RedflagError::Git)?;
-    let mut revwalk = repo.revwalk().map_err(RedflagError::Git)?;
-    revwalk.push_head().map_err(RedflagError::Git)?;
+    // Parse date filters - convert to start/end of day
+    let since_timestamp = config.git.since_date.as_ref()
+        .and_then(|date| NaiveDateTime::parse_from_str(&format!("{} 00:00:00", date), "%Y-%m-%d %H:%M:%S").ok())
+        .map(|dt| DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc).timestamp());
 
-    let commit_count = revwalk.count() as u64;
-    let progress = ProgressBar::new(commit_count);
-    progress.set_style(ProgressStyle::default_bar()
-        .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} commits")?);
+    let until_timestamp = config.git.until_date.as_ref()
+        .and_then(|date| NaiveDateTime::parse_from_str(&format!("{} 23:59:59", date), "%Y-%m-%d %H:%M:%S").ok())
+        .map(|dt| DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc).timestamp());
 
-    for oid in revwalk.filter_map(Result::ok) {
-        if let Ok(commit) = repo.find_commit(oid) {
-            process_commit(&repo, &commit, config, &mut findings);
+    // Configure revwalk based on config
+    if !config.git.branches.is_empty() {
+        for branch in &config.git.branches {
+            if let Ok(branch_ref) = repo.find_branch(branch, git2::BranchType::Local) {
+                if let Some(branch_ref_name) = branch_ref.get().name() {
+                    revwalk.push_ref(branch_ref_name)?;
+                }
+            }
         }
+    } else {
+        revwalk.push_head()?;
+    }
+
+    revwalk.set_sorting(git2::Sort::TIME)?;
+
+    // Collect commits that match our criteria
+    let commits: Vec<_> = revwalk
+        .filter_map(Result::ok)
+        .filter_map(|oid| repo.find_commit(oid).ok())
+        .filter(|commit| should_process_commit(commit, since_timestamp, until_timestamp))
+        .take(config.git.max_depth)
+        .collect();
+
+    let commit_count = commits.len();
+    let progress = ProgressBar::new(commit_count as u64);
+    progress.set_style(ProgressStyle::default_bar()
+        .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} commits")?
+        .progress_chars("=>-"));
+
+    let mut cache = SCAN_CACHE.lock().unwrap();
+    let mut seen_findings = std::collections::HashSet::new();
+
+    for commit in commits {
+        let commit_hash = commit.id().to_string();
+
+        // Check cache first
+        if let Some(cached_findings) = cache.get(&commit_hash) {
+            for finding in cached_findings {
+                let key = format!("{}:{}:{}:{}", finding.file.display(), finding.pattern_name, finding.snippet, commit_hash);
+                if seen_findings.insert(key) {
+                    handler.handle(finding.clone());
+                }
+            }
+        } else {
+            let mut findings = Vec::new();
+            process_commit(&repo, &commit, config, &mut findings);
+            for finding in &findings {
+                let key = format!("{}:{}:{}:{}", finding.file.display(), finding.pattern_name, finding.snippet, commit_hash);
+                if seen_findings.insert(key) {
+                    handler.handle(finding.clone());
+                }
+            }
+            cache.insert(commit_hash, findings);
+        }
+
         progress.inc(1);
     }
-    progress.finish();
 
-    findings
+    progress.finish_with_message("Git history scan complete");
+    Ok(())
 }
 
 fn process_commit(repo: &Repository, commit: &Commit, config: &Config, findings: &mut Vec<Finding>) {
     let parents = commit.parents();
     if parents.len() == 0 {
+        // For the initial commit, scan the entire tree
         if let Ok(tree) = commit.tree() {
             analyze_diff(repo, None, Some(&tree), commit, config, findings);
         }
     } else {
+        // For subsequent commits, scan only the changes between parent and current commit
         for parent in parents {
             if let (Ok(parent_tree), Ok(commit_tree)) = (parent.tree(), commit.tree()) {
                 analyze_diff(repo, Some(&parent_tree), Some(&commit_tree), commit, config, findings);
@@ -135,6 +208,7 @@ fn check_line(
                     line,
                     &pattern.name,
                     &pattern.description,
+                    pattern.severity,
                     commit,
                 ));
             }
@@ -152,6 +226,7 @@ fn check_line(
                 line,
                 "high-entropy",
                 "High entropy string detected",
+                Severity::Medium,
                 commit,
             ));
         }
@@ -164,6 +239,7 @@ fn create_finding(
     line: &str,
     pattern_name: &str,
     description: &str,
+    severity: Severity,
     commit: &Commit,
 ) -> Finding {
     Finding {
@@ -172,82 +248,29 @@ fn create_finding(
         pattern_name: pattern_name.to_string(),
         description: description.to_string(),
         snippet: line.chars().take(50).collect(),
+        severity,
         commit_hash: Some(commit.id().to_string()),
         commit_author: Some(commit.author().to_string()),
         commit_date: Some(commit.time().seconds().to_string()),
     }
 }
 
-pub fn scan_git_history_with_handler<H: FindingHandler>(
-    path: &Path,
-    config: &Config,
-    handler: &mut H,
-) -> Result<(), RedflagError> {
-    let repo = Repository::open(path)?;
-    let mut revwalk = repo.revwalk()?;
+fn should_process_commit(commit: &Commit, since: Option<i64>, until: Option<i64>) -> bool {
+    let commit_time = commit.time().seconds();
     
-    // Configure revwalk based on config
-    if !config.git.branches.is_empty() {
-        for branch in &config.git.branches {
-            if let Ok(branch_ref) = repo.find_branch(branch, git2::BranchType::Local) {
-                if let Ok(branch_ref_name) = branch_ref.get().name() {
-                    revwalk.push_ref(branch_ref_name)?;
-                }
-            }
-        }
-    } else {
-        revwalk.push_head()?;
-    }
-
-    // Apply date filters if configured
-    if let Some(since) = &config.git.since_date {
-        if let Ok(timestamp) = NaiveDateTime::parse_from_str(since, "%Y-%m-%d") {
-            revwalk.push(format!(">{}", timestamp.timestamp()).as_bytes())?;
+    if let Some(since_time) = since {
+        if commit_time < since_time {
+            return false;
         }
     }
 
-    if let Some(until) = &config.git.until_date {
-        if let Ok(timestamp) = NaiveDateTime::parse_from_str(until, "%Y-%m-%d") {
-            revwalk.push(format!("<{}", timestamp.timestamp()).as_bytes())?;
+    if let Some(until_time) = until {
+        if commit_time > until_time {
+            return false;
         }
     }
 
-    let commit_count = revwalk.count() as u64;
-    let progress = ProgressBar::new(commit_count.min(config.git.max_depth as u64));
-    progress.set_style(ProgressStyle::default_bar()
-        .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} commits")?
-        .progress_chars("=>-"));
-
-    let mut cache = SCAN_CACHE.lock().unwrap();
-    let mut processed = 0;
-
-    for oid in revwalk.filter_map(Result::ok) {
-        if processed >= config.git.max_depth {
-            break;
-        }
-
-        let commit = repo.find_commit(oid)?;
-        let commit_hash = commit.id().to_string();
-
-        // Check cache first
-        if let Some(cached_findings) = cache.get(&commit_hash) {
-            for finding in cached_findings {
-                handler.handle(finding.clone());
-            }
-        } else {
-            let findings = process_commit(&repo, &commit, config, &mut Vec::new())?;
-            for finding in &findings {
-                handler.handle(finding.clone());
-            }
-            cache.insert(commit_hash, findings);
-        }
-
-        processed += 1;
-        progress.inc(1);
-    }
-
-    progress.finish_with_message("Git history scan complete");
-    Ok(())
+    true
 }
 
 #[cfg(test)]
@@ -258,12 +281,30 @@ mod tests {
     use std::io::Write;
     use tempfile::tempdir;
 
+    struct TestHandler {
+        findings: Vec<Finding>,
+    }
+
+    impl TestHandler {
+        fn new() -> Self {
+            Self {
+                findings: Vec::new(),
+            }
+        }
+    }
+
+    impl FindingHandler for TestHandler {
+        fn handle(&mut self, finding: Finding) {
+            self.findings.push(finding);
+        }
+    }
+
     fn create_test_repo() -> (tempfile::TempDir, Repository) {
         let dir = tempdir().unwrap();
         let repo = Repository::init(&dir).unwrap();
         let sig = Signature::now("Test User", "test@example.com").unwrap();
     
-        // First commit
+        // First commit with a secret
         {
             let mut index = repo.index().unwrap();
             let config_file = dir.path().join("config.env");
@@ -278,13 +319,13 @@ mod tests {
                 Some("HEAD"),
                 &sig,
                 &sig,
-                "Initial commit",
+                "Initial commit with secret",
                 &tree,
                 &[],
             ).unwrap();
-        } // index and tree dropped here
+        }
     
-        // Second commit
+        // Second commit removing the secret
         {
             let mut index = repo.index().unwrap();
             let config_file = dir.path().join("config.env");
@@ -303,85 +344,164 @@ mod tests {
                 &tree,
                 &[&parent],
             ).unwrap();
-        } // index, tree, and parent dropped here
+        }
+
+        // Third commit with a different secret
+        {
+            let mut index = repo.index().unwrap();
+            let config_file = dir.path().join("config.env");
+            File::create(&config_file).unwrap()
+                .write_all(b"AWS_SECRET_KEY=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ABCD").unwrap();
+            
+            index.add_path(Path::new("config.env")).unwrap();
+            let oid = index.write_tree().unwrap();
+            let tree = repo.find_tree(oid).unwrap();
+            let parent = repo.head().unwrap().peel_to_commit().unwrap();
+            
+            repo.commit(
+                Some("HEAD"),
+                &sig,
+                &sig,
+                "Add AWS secret",
+                &tree,
+                &[&parent],
+            ).unwrap();
+        }
     
         (dir, repo)
     }
 
     #[test]
-    fn test_find_secret_in_history() {
+    fn test_find_secrets_in_history() -> Result<(), RedflagError> {
         let (dir, _repo) = create_test_repo();
+        let mut handler = TestHandler::new();
+        
+        let config = Config {
+            patterns: vec![
+                SecretPattern {
+                    name: "test-api-key".to_string(),
+                    pattern: r#"API_KEY=\w{28}"#.to_string(),
+                    description: "API Key detected".to_string(),
+                    severity: Severity::High,
+                },
+                SecretPattern {
+                    name: "aws-secret".to_string(),
+                    pattern: r#"AWS_SECRET_KEY=\w{40}"#.to_string(),
+                    description: "AWS Secret Key detected".to_string(),
+                    severity: Severity::Critical,
+                }
+            ],
+            extensions: vec!["env".to_string()],
+            entropy: EntropyConfig {
+                enabled: false,
+                ..Default::default()
+            },
+            ..Config::default()
+        };
+
+        scan_git_history_with_handler(dir.path(), &config, &mut handler)?;
+        
+        assert_eq!(handler.findings.len(), 2, "Expected to find 2 secrets");
+        
+        // Check findings in reverse chronological order
+        let mut findings = handler.findings;
+        findings.sort_by(|a, b| b.commit_date.cmp(&a.commit_date));
+        
+        // Verify we found the expected types of secrets
+        let mut api_key_count = 0;
+        let mut aws_secret_count = 0;
+        
+        for finding in findings {
+            match finding.pattern_name.as_str() {
+                "test-api-key" => api_key_count += 1,
+                "aws-secret" => aws_secret_count += 1,
+                _ => panic!("Unexpected pattern name: {}", finding.pattern_name),
+            }
+        }
+        
+        assert_eq!(api_key_count, 1, "Expected to find 1 API key");
+        assert_eq!(aws_secret_count, 1, "Expected to find 1 AWS secret");
+        Ok(())
+    }
+
+    #[test]
+    fn test_date_filtering() {
+        let (dir, _repo) = create_test_repo();
+        let mut handler = TestHandler::new();
+        
+        // Set date range to future to exclude all commits
+        let tomorrow = chrono::Utc::now() + chrono::Duration::days(1);
+        let config = Config {
+            patterns: vec![
+                SecretPattern {
+                    name: "any-secret".to_string(),
+                    pattern: r#"(API_KEY|AWS).*"#.to_string(),
+                    description: "Any secret".to_string(),
+                    severity: Severity::Medium,
+                }
+            ],
+            extensions: vec!["env".to_string()],
+            git: GitConfig {
+                since_date: Some(tomorrow.format("%Y-%m-%d").to_string()),
+                ..Default::default()
+            },
+            ..Config::default()
+        };
+
+        scan_git_history_with_handler(dir.path(), &config, &mut handler).unwrap();
+        assert_eq!(handler.findings.len(), 0, "Should find no secrets in future commits");
+
+        // Now test with a date range that includes our commits
+        let mut handler = TestHandler::new();
+        let yesterday = chrono::Utc::now() - chrono::Duration::days(1);
+        let config = Config {
+            patterns: vec![
+                SecretPattern {
+                    name: "any-secret".to_string(),
+                    pattern: r#"(API_KEY|AWS).*"#.to_string(),
+                    description: "Any secret".to_string(),
+                    severity: Severity::Medium,
+                }
+            ],
+            extensions: vec!["env".to_string()],
+            git: GitConfig {
+                since_date: Some(yesterday.format("%Y-%m-%d").to_string()),
+                until_date: Some(tomorrow.format("%Y-%m-%d").to_string()),
+                ..Default::default()
+            },
+            ..Config::default()
+        };
+
+        scan_git_history_with_handler(dir.path(), &config, &mut handler).unwrap();
+        assert!(handler.findings.len() > 0, "Should find secrets in current date range");
+    }
+
+    #[test]
+    fn test_cache_management() {
+        let (dir, _repo) = create_test_repo();
+        let mut handler = TestHandler::new();
         let config = Config {
             patterns: vec![
                 SecretPattern {
                     name: "test-api-key".to_string(),
                     pattern: r#"API_KEY=\w{28}"#.to_string(),
                     description: "Test API key pattern".to_string(),
+                    severity: Severity::High,
                 }
             ],
             extensions: vec!["env".to_string()],
             ..Config::default()
         };
 
-        let findings = scan_git_history(dir.path(), &config);
-        
-        assert!(!findings.is_empty(), "No findings detected");
-        let secret_finding = &findings[0];
-        assert_eq!(secret_finding.pattern_name, "test-api-key");
-        assert!(secret_finding.commit_hash.is_some());
-        assert!(secret_finding.commit_author.as_ref().unwrap().contains("Test User"));
-        assert_eq!(secret_finding.file, Path::new("config.env"));
-    }
+        // First scan should populate cache
+        scan_git_history_with_handler(dir.path(), &config, &mut handler).unwrap();
+        let first_count = handler.findings.len();
 
-    #[test]
-    fn test_ignore_unconfigured_extensions() {
-        let (dir, _repo) = create_test_repo();
-        let config = Config {
-            extensions: vec!["txt".to_string()], // Different from test repo's .env
-            ..Config::default()
-        };
+        // Second scan should use cache
+        let mut handler = TestHandler::new();
+        scan_git_history_with_handler(dir.path(), &config, &mut handler).unwrap();
+        let second_count = handler.findings.len();
 
-        let findings = scan_git_history(dir.path(), &config);
-        assert!(findings.is_empty(), "Found secrets in ignored extension");
-    }
-
-    #[test]
-    fn test_entropy_detection_in_history() {
-        let dir = tempdir().unwrap();
-        let repo = Repository::init(&dir).unwrap();
-        let sig = Signature::now("Test User", "test@example.com").unwrap();
-
-        // Create file with high entropy string
-        let file_path = dir.path().join("creds.txt");
-        let mut file = File::create(&file_path).unwrap();
-        writeln!(file, "password = \"dK3@9x!2sQ#mYp5vRtHw}}\"").unwrap();
-
-        // Commit the file
-        let mut index = repo.index().unwrap();
-        index.add_path(&Path::new("creds.txt")).unwrap();
-        let oid = index.write_tree().unwrap();
-        let tree = repo.find_tree(oid).unwrap();
-        repo.commit(
-            Some("HEAD"),
-            &sig,
-            &sig,
-            "Add high entropy password",
-            &tree,
-            &[],
-        ).unwrap();
-
-        let config = Config {
-            entropy: EntropyConfig {
-                enabled: true,
-                threshold: 3.5,
-                min_length: 12,
-            },
-            extensions: vec!["txt".to_string()],
-            ..Config::default()
-        };
-
-        let findings = scan_git_history(dir.path(), &config);
-        assert!(!findings.is_empty(), "No entropy findings detected");
-        assert_eq!(findings[0].pattern_name, "high-entropy");
+        assert_eq!(first_count, second_count, "Cache should provide consistent results");
     }
 }

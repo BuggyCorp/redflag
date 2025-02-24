@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use std::fs;
 use once_cell::sync::Lazy;
 use crate::error::RedflagError;
-use log::warn;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
@@ -50,11 +49,27 @@ pub struct ExclusionRule {
     pub policy: ExclusionPolicy,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+pub enum Severity {
+    Critical,
+    High,
+    Medium,
+    Low,
+}
+
+impl Default for Severity {
+    fn default() -> Self {
+        Severity::Medium
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SecretPattern {
     pub name: String,
     pub pattern: String,
     pub description: String,
+    #[serde(default)]
+    pub severity: Severity,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -83,41 +98,74 @@ static DEFAULT_PATTERNS: Lazy<Vec<SecretPattern>> = Lazy::new(|| {
             name: "AWS Access Key".to_string(),
             pattern: r"(?i)(AWS|AMAZON)_?(ACCESS|SECRET)?_?(KEY)?_?ID\s*=?\s*[A-Z0-9]{20}".to_string(),
             description: "AWS Access Key ID detected".to_string(),
+            severity: Severity::Critical,
         },
         SecretPattern {
             name: "AWS Secret Key".to_string(),
             pattern: r"(?i)(AWS|AMAZON)_?(ACCESS|SECRET)?_?(KEY)?\s*=?\s*[A-Za-z0-9/+=]{40}".to_string(),
             description: "AWS Secret Access Key detected".to_string(),
+            severity: Severity::Critical,
         },
         SecretPattern {
             name: "GitHub Token".to_string(),
             pattern: r"(?i)github[_\-\s]*(pat|token|key)\s*=?\s*gh[pousr]_[a-zA-Z0-9]{36}".to_string(),
             description: "GitHub Personal Access Token detected".to_string(),
+            severity: Severity::Critical,
         },
         SecretPattern {
             name: "Generic API Key".to_string(),
-            pattern: r"(?i)api[_\-\s]*key\s*=?\s*['"][a-zA-Z0-9]{32,}['"]".to_string(),
+            pattern: r#"(?i)api[_\-\s]*key\s*=?\s*['""][a-zA-Z0-9]{32,}['""]"#.to_string(),
             description: "Generic API key detected".to_string(),
+            severity: Severity::High,
         },
         SecretPattern {
             name: "Private Key".to_string(),
             pattern: r"-----BEGIN\s+(RSA|DSA|EC|OPENSSH)\s+PRIVATE\s+KEY(\s+ENCRYPTED)?-----".to_string(),
             description: "Private key file detected".to_string(),
+            severity: Severity::Critical,
         },
         SecretPattern {
             name: "Password Assignment".to_string(),
-            pattern: r"(?i)(password|passwd|pwd)\s*=\s*['"][^'\"]{8,}['"]".to_string(),
+            pattern: r#"(?i)(password|passwd|pwd)\s*=\s*['""][^'""]{8,}['""]"#.to_string(),
             description: "Possible hardcoded password".to_string(),
+            severity: Severity::High,
         },
         SecretPattern {
             name: "Database Connection String".to_string(),
-            pattern: r"(?i)(mongodb|postgresql|mysql)://[^\s<>'\"]+".to_string(),
+            pattern: r#"(?i)(mongodb|postgresql|mysql)://[^\s<>'""]+)"#.to_string(),
             description: "Database connection string detected".to_string(),
+            severity: Severity::Critical,
         },
         SecretPattern {
             name: "JWT Token".to_string(),
             pattern: r"eyJ[A-Za-z0-9-_=]+\.[A-Za-z0-9-_=]+\.?[A-Za-z0-9-_.+/=]*".to_string(),
             description: "JWT token detected".to_string(),
+            severity: Severity::High,
+        },
+        // Sensitive file patterns
+        SecretPattern {
+            name: "Environment File".to_string(),
+            pattern: r"\.env(\.[a-zA-Z0-9]+)?$".to_string(),
+            description: "Environment file detected".to_string(),
+            severity: Severity::Medium,
+        },
+        SecretPattern {
+            name: "Private Key File".to_string(),
+            pattern: r"(?i)(id_rsa|id_dsa|id_ecdsa|id_ed25519|.*\.pem|.*\.key|.*\.pfx|.*\.p12)$".to_string(),
+            description: "Private key file detected".to_string(),
+            severity: Severity::High,
+        },
+        SecretPattern {
+            name: "Certificate File".to_string(),
+            pattern: r"(?i)(.*\.crt|.*\.cer|.*\.ca-bundle)$".to_string(),
+            description: "Certificate file detected".to_string(),
+            severity: Severity::Medium,
+        },
+        SecretPattern {
+            name: "Kubernetes Config".to_string(),
+            pattern: r"(?i)(kubeconfig|\.kube/config)$".to_string(),
+            description: "Kubernetes configuration file detected".to_string(),
+            severity: Severity::High,
         },
     ]
 });
@@ -247,17 +295,16 @@ impl Config {
         fs::write(path, content)?;
         Ok(())
     }
-}
 
-// Add a command to generate a default config file
-pub fn generate_default_config(path: &PathBuf) -> Result<(), RedflagError> {
-    let config = Config::default();
-    config.save(path)
+    pub fn generate_default_config(path: &PathBuf) -> Result<(), RedflagError> {
+        let default_config = Config::default();
+        default_config.save(path)
+    }
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self {
+        Config {
             patterns: default_patterns(),
             extensions: default_extensions(),
             exclusions: default_exclusions(),
