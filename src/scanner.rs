@@ -40,6 +40,10 @@ struct ExclusionRule {
     policy: ExclusionPolicy,
 }
 
+pub trait FindingHandler {
+    fn handle(&mut self, finding: Finding);
+}
+
 impl Scanner {
     pub fn with_config(config: Config) -> Self {
         let mut patterns = Vec::new();
@@ -198,6 +202,11 @@ impl Scanner {
             commit_author: None,
             commit_date: None,
         }
+    }
+
+    pub fn scan_with_handler<H: FindingHandler>(&self, path: &str, handler: &mut H) {
+        // Instead of collecting findings, pass them to handler
+        // This allows for streaming output or different handling strategies
     }
 }
 

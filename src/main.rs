@@ -36,6 +36,18 @@ enum Commands {
 
         #[arg(long)]
         git_history: bool,
+
+        #[arg(long)]
+        git_max_depth: Option<usize>,
+
+        #[arg(long)]
+        git_since: Option<String>,
+
+        #[arg(long)]
+        git_until: Option<String>,
+
+        #[arg(long, value_delimiter = ',')]
+        git_branches: Option<Vec<String>>,
     },
     /// Install git pre-commit hook
     InstallHook,
@@ -46,7 +58,7 @@ fn main() -> Result<(), RedflagError> {
 
     let cli = Cli::parse();
     match cli.command {
-        Commands::Scan { path, config, format, git_history } => run_scan(path, config, format, git_history),
+        Commands::Scan { path, config, format, git_history, git_max_depth, git_since, git_until, git_branches } => run_scan(path, config, format, git_history, GitScanOptions { max_depth: git_max_depth, branches: git_branches, since_date: git_since, until_date: git_until }),
         Commands::InstallHook => install_hook(),
     }
 }
@@ -56,23 +68,45 @@ fn run_scan(
     config_path: Option<PathBuf>,
     format: output::OutputFormat,
     git_history: bool,
+    git_options: GitScanOptions,
 ) -> Result<(), RedflagError> {
-    let config = Config::load(config_path)?;
-    let scanner = Scanner::with_config(config.clone());
+    let mut config = Config::load(config_path)?;
     
-    let findings = if git_history {
-        git_scanner::scan_git_history(Path::new(&path), &config)
-    } else {
-        scanner.scan_directory(&path)
-    };
+    // Override git config with CLI options if provided
+    if git_history {
+        if let Some(depth) = git_options.max_depth {
+            config.git.max_depth = depth;
+        }
+        if let Some(branches) = git_options.branches {
+            config.git.branches = branches;
+        }
+        if let Some(since) = git_options.since_date {
+            config.git.since_date = Some(since);
+        }
+        if let Some(until) = git_options.until_date {
+            config.git.until_date = Some(until);
+        }
+    }
 
-    if !findings.is_empty() {
-        println!("{}", output::format_findings(&findings, format));
-        std::process::exit(1);
+    let scanner = Scanner::with_config(config.clone());
+    let mut handler = OutputHandler::new(format);
+    
+    // Stream findings instead of collecting them
+    scanner.scan_with_handler(&path, &mut handler)?;
+    
+    if git_history {
+        git_scanner::scan_git_history_with_handler(Path::new(&path), &config, &mut handler)?;
     }
     
-    println!("No secrets found!");
+    handler.finish()?;
     Ok(())
+}
+
+struct GitScanOptions {
+    max_depth: Option<usize>,
+    branches: Option<Vec<String>>,
+    since_date: Option<String>,
+    until_date: Option<String>,
 }
 
 fn install_hook() -> Result<(), RedflagError> {

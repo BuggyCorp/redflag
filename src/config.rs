@@ -3,19 +3,26 @@ use std::path::PathBuf;
 use crate::error::RedflagError;
 use log::warn;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
-    #[serde(default = "default_secret_patterns")]
     pub patterns: Vec<SecretPattern>,
-    
-    #[serde(default)]
-    pub entropy: EntropyConfig,
-
-    #[serde(default = "default_extensions")]
     pub extensions: Vec<String>,
-
-    #[serde(default)]
     pub exclusions: Vec<ExclusionRule>,
+    pub entropy: EntropyConfig,
+    #[serde(default)]
+    pub git: GitConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GitConfig {
+    #[serde(default = "default_max_depth")]
+    pub max_depth: usize,
+    #[serde(default)]
+    pub branches: Vec<String>,
+    #[serde(default)]
+    pub since_date: Option<String>,
+    #[serde(default)]
+    pub until_date: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -94,6 +101,21 @@ fn default_true() -> bool { true }
 fn default_threshold() -> f64 { 3.5 }
 fn default_min_length() -> usize { 20 }
 
+fn default_max_depth() -> usize {
+    1000
+}
+
+impl Default for GitConfig {
+    fn default() -> Self {
+        Self {
+            max_depth: default_max_depth(),
+            branches: vec!["main".to_string(), "master".to_string()],
+            since_date: None,
+            until_date: None,
+        }
+    }
+}
+
 impl Config {
     pub fn load(user_path: Option<PathBuf>) -> Result<Self, RedflagError> {
         // Try user-specified config first
@@ -157,6 +179,7 @@ impl Default for Config {
                     policy: ExclusionPolicy::Ignore,
                 },
             ],
+            git: GitConfig::default(),
         }
     }
 }

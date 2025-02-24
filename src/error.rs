@@ -10,6 +10,9 @@ pub enum RedflagError {
     
     #[error("Regex error: {0}")]
     Regex(#[from] regex::Error),
+    
+    #[error("Git error: {0}")]
+    Git(#[from] git2::Error),
 }
 
 impl From<toml::de::Error> for RedflagError {

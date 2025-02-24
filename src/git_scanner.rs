@@ -6,36 +6,54 @@ use crate::scanner::calculate_shannon_entropy;
 use bstr::ByteSlice;
 use crate::config::EntropyConfig;
 use crate::config::SecretPattern;
+use indicatif::{ProgressBar, ProgressStyle};
+use crate::error::RedflagError;
+use std::collections::HashMap;
+use chrono::NaiveDateTime;
+use std::sync::Mutex;
+use once_cell::sync::Lazy;
+
+struct ScanCache {
+    commit_results: HashMap<String, Vec<Finding>>,
+}
+
+impl ScanCache {
+    fn new() -> Self {
+        ScanCache {
+            commit_results: HashMap::new(),
+        }
+    }
+
+    fn get(&self, commit_hash: &str) -> Option<&Vec<Finding>> {
+        self.commit_results.get(commit_hash)
+    }
+
+    fn insert(&mut self, commit_hash: String, findings: Vec<Finding>) {
+        self.commit_results.insert(commit_hash, findings);
+    }
+}
+
+static SCAN_CACHE: Lazy<Mutex<ScanCache>> = Lazy::new(|| Mutex::new(ScanCache::new()));
 
 pub fn scan_git_history(path: &Path, config: &Config) -> Vec<Finding> {
     let mut findings = Vec::new();
     
-    let repo = match Repository::open(path) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("Failed to open repository: {}", e);
-            return findings;
-        }
-    };
+    let repo = Repository::open(path).map_err(RedflagError::Git)?;
+    let mut revwalk = repo.revwalk().map_err(RedflagError::Git)?;
+    revwalk.push_head().map_err(RedflagError::Git)?;
 
-    let mut revwalk = match repo.revwalk() {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("Failed to create revwalk: {}", e);
-            return findings;
-        }
-    };
-
-    if let Err(e) = revwalk.push_head() {
-        eprintln!("Failed to push head: {}", e);
-        return findings;
-    }
+    let commit_count = revwalk.count() as u64;
+    let progress = ProgressBar::new(commit_count);
+    progress.set_style(ProgressStyle::default_bar()
+        .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} commits")?);
 
     for oid in revwalk.filter_map(Result::ok) {
         if let Ok(commit) = repo.find_commit(oid) {
             process_commit(&repo, &commit, config, &mut findings);
         }
+        progress.inc(1);
     }
+    progress.finish();
 
     findings
 }
@@ -158,6 +176,78 @@ fn create_finding(
         commit_author: Some(commit.author().to_string()),
         commit_date: Some(commit.time().seconds().to_string()),
     }
+}
+
+pub fn scan_git_history_with_handler<H: FindingHandler>(
+    path: &Path,
+    config: &Config,
+    handler: &mut H,
+) -> Result<(), RedflagError> {
+    let repo = Repository::open(path)?;
+    let mut revwalk = repo.revwalk()?;
+    
+    // Configure revwalk based on config
+    if !config.git.branches.is_empty() {
+        for branch in &config.git.branches {
+            if let Ok(branch_ref) = repo.find_branch(branch, git2::BranchType::Local) {
+                if let Ok(branch_ref_name) = branch_ref.get().name() {
+                    revwalk.push_ref(branch_ref_name)?;
+                }
+            }
+        }
+    } else {
+        revwalk.push_head()?;
+    }
+
+    // Apply date filters if configured
+    if let Some(since) = &config.git.since_date {
+        if let Ok(timestamp) = NaiveDateTime::parse_from_str(since, "%Y-%m-%d") {
+            revwalk.push(format!(">{}", timestamp.timestamp()).as_bytes())?;
+        }
+    }
+
+    if let Some(until) = &config.git.until_date {
+        if let Ok(timestamp) = NaiveDateTime::parse_from_str(until, "%Y-%m-%d") {
+            revwalk.push(format!("<{}", timestamp.timestamp()).as_bytes())?;
+        }
+    }
+
+    let commit_count = revwalk.count() as u64;
+    let progress = ProgressBar::new(commit_count.min(config.git.max_depth as u64));
+    progress.set_style(ProgressStyle::default_bar()
+        .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} commits")?
+        .progress_chars("=>-"));
+
+    let mut cache = SCAN_CACHE.lock().unwrap();
+    let mut processed = 0;
+
+    for oid in revwalk.filter_map(Result::ok) {
+        if processed >= config.git.max_depth {
+            break;
+        }
+
+        let commit = repo.find_commit(oid)?;
+        let commit_hash = commit.id().to_string();
+
+        // Check cache first
+        if let Some(cached_findings) = cache.get(&commit_hash) {
+            for finding in cached_findings {
+                handler.handle(finding.clone());
+            }
+        } else {
+            let findings = process_commit(&repo, &commit, config, &mut Vec::new())?;
+            for finding in &findings {
+                handler.handle(finding.clone());
+            }
+            cache.insert(commit_hash, findings);
+        }
+
+        processed += 1;
+        progress.inc(1);
+    }
+
+    progress.finish_with_message("Git history scan complete");
+    Ok(())
 }
 
 #[cfg(test)]
