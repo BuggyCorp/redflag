@@ -96,8 +96,16 @@ pub fn scan_git_history_with_handler<H: FindingHandler>(
         .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} commits")?
         .progress_chars("=>-"));
 
+    // Clear the cache for tests
+    #[cfg(test)]
+    {
+        let mut cache = SCAN_CACHE.lock().unwrap();
+        cache.commit_results.clear();
+    }
+
     let mut cache = SCAN_CACHE.lock().unwrap();
     let mut seen_findings = std::collections::HashSet::new();
+    let mut all_findings = Vec::new();
 
     for commit in commits {
         let commit_hash = commit.id().to_string();
@@ -107,7 +115,7 @@ pub fn scan_git_history_with_handler<H: FindingHandler>(
             for finding in cached_findings {
                 let key = format!("{}:{}:{}", finding.file.display(), finding.pattern_name, finding.snippet);
                 if seen_findings.insert(key) {
-                    handler.handle(finding.clone());
+                    all_findings.push(finding.clone());
                 }
             }
         } else {
@@ -116,13 +124,18 @@ pub fn scan_git_history_with_handler<H: FindingHandler>(
             for finding in &findings {
                 let key = format!("{}:{}:{}", finding.file.display(), finding.pattern_name, finding.snippet);
                 if seen_findings.insert(key) {
-                    handler.handle(finding.clone());
+                    all_findings.push(finding.clone());
                 }
             }
             cache.insert(commit_hash, findings);
         }
 
         progress.inc(1);
+    }
+
+    // Now handle all findings
+    for finding in all_findings {
+        handler.handle(finding);
     }
 
     progress.finish_with_message("Git history scan complete");
@@ -299,7 +312,7 @@ mod tests {
         }
     }
 
-    fn create_test_repo() -> (tempfile::TempDir, Repository) {
+    fn create_test_repo_for_secrets() -> (tempfile::TempDir, Repository) {
         let dir = tempdir().unwrap();
         let repo = Repository::init(&dir).unwrap();
         let sig = Signature::now("Test User", "test@example.com").unwrap();
@@ -373,7 +386,7 @@ mod tests {
 
     #[test]
     fn test_find_secrets_in_history() -> Result<(), RedflagError> {
-        let (dir, _repo) = create_test_repo();
+        let (dir, _repo) = create_test_repo_for_secrets();
         let mut handler = TestHandler::new();
         
         let config = Config {
@@ -394,9 +407,16 @@ mod tests {
             extensions: vec!["env".to_string()],
             entropy: EntropyConfig {
                 enabled: false,
-                ..Default::default()
+                threshold: 3.5,
+                min_length: 20,
             },
-            ..Config::default()
+            exclusions: Vec::new(),
+            git: GitConfig {
+                max_depth: 100,
+                branches: Vec::new(),
+                since_date: None,
+                until_date: None,
+            },
         };
 
         scan_git_history_with_handler(dir.path(), &config, &mut handler)?;
@@ -426,7 +446,7 @@ mod tests {
 
     #[test]
     fn test_date_filtering() {
-        let (dir, _repo) = create_test_repo();
+        let (dir, _repo) = create_test_repo_for_secrets();
         let mut handler = TestHandler::new();
         
         // Set date range to future to exclude all commits
@@ -478,7 +498,7 @@ mod tests {
 
     #[test]
     fn test_cache_management() {
-        let (dir, _repo) = create_test_repo();
+        let (dir, _repo) = create_test_repo_for_secrets();
         let mut handler = TestHandler::new();
         let config = Config {
             patterns: vec![
