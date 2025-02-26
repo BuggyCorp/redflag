@@ -3,18 +3,12 @@ use crate::config::Severity;
 use std::io::{self, Write};
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 use std::collections::HashMap;
-use std::any::Any;
-use std::sync::Arc;
-use std::sync::Mutex;
 
 #[derive(clap::ValueEnum, Clone, Debug)]
 pub enum OutputFormat {
     Text,
     Json
 }
-
-trait WriteAny: Write + Any {}
-impl<T: Write + Any> WriteAny for T {}
 
 pub struct OutputHandler {
     format: OutputFormat,

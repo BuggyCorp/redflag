@@ -1,4 +1,4 @@
-use git2::{Commit, DiffOptions, Repository, Tree};
+use git2::{Commit, DiffOptions, Repository, Tree, Delta};
 use crate::{
     config::{Config, Severity, SecretPattern, GitConfig, EntropyConfig},
     scanner::Finding,
@@ -105,7 +105,7 @@ pub fn scan_git_history_with_handler<H: FindingHandler>(
         // Check cache first
         if let Some(cached_findings) = cache.get(&commit_hash) {
             for finding in cached_findings {
-                let key = format!("{}:{}:{}:{}", finding.file.display(), finding.pattern_name, finding.snippet, commit_hash);
+                let key = format!("{}:{}:{}", finding.file.display(), finding.pattern_name, finding.snippet);
                 if seen_findings.insert(key) {
                     handler.handle(finding.clone());
                 }
@@ -114,7 +114,7 @@ pub fn scan_git_history_with_handler<H: FindingHandler>(
             let mut findings = Vec::new();
             process_commit(&repo, &commit, config, &mut findings);
             for finding in &findings {
-                let key = format!("{}:{}:{}:{}", finding.file.display(), finding.pattern_name, finding.snippet, commit_hash);
+                let key = format!("{}:{}:{}", finding.file.display(), finding.pattern_name, finding.snippet);
                 if seen_findings.insert(key) {
                     handler.handle(finding.clone());
                 }
@@ -130,19 +130,16 @@ pub fn scan_git_history_with_handler<H: FindingHandler>(
 }
 
 fn process_commit(repo: &Repository, commit: &Commit, config: &Config, findings: &mut Vec<Finding>) {
-    let parents = commit.parents();
-    if parents.len() == 0 {
-        // For the initial commit, scan the entire tree
-        if let Ok(tree) = commit.tree() {
-            analyze_diff(repo, None, Some(&tree), commit, config, findings);
-        }
-    } else {
-        // For subsequent commits, scan only the changes between parent and current commit
-        for parent in parents {
-            if let (Ok(parent_tree), Ok(commit_tree)) = (parent.tree(), commit.tree()) {
-                analyze_diff(repo, Some(&parent_tree), Some(&commit_tree), commit, config, findings);
-            }
-        }
+    if let Ok(tree) = commit.tree() {
+        // Get parent commit to compare changes
+        let parent_tree = if commit.parent_count() > 0 {
+            commit.parent(0).ok().and_then(|parent| parent.tree().ok())
+        } else {
+            None
+        };
+        
+        // Only analyze the diff between this commit and its parent
+        analyze_diff(repo, parent_tree.as_ref(), Some(&tree), commit, config, findings);
     }
 }
 
@@ -157,8 +154,11 @@ fn analyze_diff(
     let mut diff_options = DiffOptions::new();
     if let Ok(diff) = repo.diff_tree_to_tree(old_tree, new_tree, Some(&mut diff_options)) {
         let _ = diff.foreach(&mut |delta, _| {
-            if let Some(new_file) = delta.new_file().path() {
-                process_file_diff(repo, delta, commit, config, findings, new_file);
+            // Only process new or modified files, skip deletions
+            if delta.status() != Delta::Deleted {
+                if let Some(new_file) = delta.new_file().path() {
+                    process_file_diff(repo, delta, commit, config, findings, new_file);
+                }
             }
             true
         }, None, None, None);
