@@ -107,6 +107,54 @@ static DEFAULT_PATTERNS: Lazy<Vec<SecretPattern>> = Lazy::new(|| {
             severity: Severity::Critical,
         },
         SecretPattern {
+            name: "AWS Key in Object".to_string(),
+            pattern: r#"key\s*:\s*['""]AKIA[A-Z0-9]{16}['""]"#.to_string(),
+            description: "AWS Access Key ID in object property detected".to_string(),
+            severity: Severity::Critical,
+        },
+        SecretPattern {
+            name: "AWS Secret in Object".to_string(),
+            pattern: r#"secret\s*:\s*['""][A-Za-z0-9/+=]{40}['""]"#.to_string(),
+            description: "AWS Secret Access Key in object property detected".to_string(),
+            severity: Severity::Critical,
+        },
+        SecretPattern {
+            name: "AWS Direct Key Assignment".to_string(),
+            pattern: r#"key\s*:\s*process\.env\.AWS_ACCESS_KEY_ID\s*\|\|\s*['"]AKIA[A-Z0-9]{16}['"]"#.to_string(),
+            description: "AWS Access Key ID with direct assignment detected".to_string(),
+            severity: Severity::Critical,
+        },
+        SecretPattern {
+            name: "AWS Direct Secret Assignment".to_string(),
+            pattern: r#"secret\s*:\s*process\.env\.AWS_SECRET_ACCESS_KEY\s*\|\|\s*['"][A-Za-z0-9/+=]{40}['"]"#.to_string(),
+            description: "AWS Secret Access Key with direct assignment detected".to_string(),
+            severity: Severity::Critical,
+        },
+        SecretPattern {
+            name: "AWS Access Key with Fallback".to_string(),
+            pattern: r#"(?i)key\s*:\s*.*\|\|\s*['"]AKIA[A-Z0-9]{16}['"]"#.to_string(),
+            description: "AWS Access Key ID with environment fallback detected".to_string(),
+            severity: Severity::Critical,
+        },
+        SecretPattern {
+            name: "AWS Secret with Fallback".to_string(),
+            pattern: r#"(?i)secret\s*:\s*.*\|\|\s*['"][A-Za-z0-9/+=]{40}['"]"#.to_string(),
+            description: "AWS Secret Access Key with environment fallback detected".to_string(),
+            severity: Severity::Critical,
+        },
+        SecretPattern {
+            name: "Password with Fallback".to_string(),
+            pattern: r#"(?i)(password|passwd|pwd)\s*:\s*.*\|\|\s*['""][^'""]{8,}['""]"#.to_string(),
+            description: "Possible hardcoded password with environment fallback".to_string(),
+            severity: Severity::High,
+        },
+        SecretPattern {
+            name: "Generic Fallback Secret".to_string(),
+            pattern: r#"(?i):\s*process\.env\.[A-Za-z0-9_]+\s*\|\|\s*['""][^'""]{8,}['""]"#.to_string(),
+            description: "Possible hardcoded secret with environment fallback".to_string(),
+            severity: Severity::High,
+        },
+        SecretPattern {
             name: "GitHub Token".to_string(),
             pattern: r"(?i)github[_\-\s]*(pat|token|key)\s*=?\s*gh[pousr]_[a-zA-Z0-9]{36}".to_string(),
             description: "GitHub Personal Access Token detected".to_string(),
@@ -120,7 +168,7 @@ static DEFAULT_PATTERNS: Lazy<Vec<SecretPattern>> = Lazy::new(|| {
         },
         SecretPattern {
             name: "Private Key".to_string(),
-            pattern: r"-----BEGIN\s+(RSA|DSA|EC|OPENSSH)\s+PRIVATE\s+KEY(\s+ENCRYPTED)?-----".to_string(),
+            pattern: r"-----BEGIN\s+(RSA|DSA|EC|OPENSSH)?\s*PRIVATE\s+KEY(\s+ENCRYPTED)?-----".to_string(),
             description: "Private key file detected".to_string(),
             severity: Severity::Critical,
         },
@@ -131,8 +179,14 @@ static DEFAULT_PATTERNS: Lazy<Vec<SecretPattern>> = Lazy::new(|| {
             severity: Severity::High,
         },
         SecretPattern {
+            name: "Password in Object".to_string(),
+            pattern: r#"(?i)(password|passwd|pwd)\s*:\s*['""][^'""]{8,}['""]"#.to_string(),
+            description: "Possible hardcoded password in object property".to_string(),
+            severity: Severity::High,
+        },
+        SecretPattern {
             name: "Database Connection String".to_string(),
-            pattern: r#"(?i)(mongodb|postgresql|mysql)://[^\s<>'""]+)"#.to_string(),
+            pattern: r#"(?i)(mongodb|postgresql|mysql)://[^\s<>'"""]+"#.to_string(),
             description: "Database connection string detected".to_string(),
             severity: Severity::Critical,
         },
@@ -209,6 +263,7 @@ fn default_extensions() -> Vec<String> {
 
 fn default_exclusions() -> Vec<ExclusionRule> {
     vec![
+        // Package manager folders
         ExclusionRule {
             pattern: "**/node_modules/**".to_string(),
             policy: ExclusionPolicy::Ignore,
@@ -229,6 +284,155 @@ fn default_exclusions() -> Vec<ExclusionRule> {
             pattern: "**/dist/**".to_string(),
             policy: ExclusionPolicy::Ignore,
         },
+        // Additional package manager folders
+        ExclusionRule {
+            pattern: "**/.venv/**".to_string(),
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/venv/**".to_string(),
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/.env/**".to_string(), // Python virtual env folder
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/env/**".to_string(), // Python virtual env folder
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/__pypackages__/**".to_string(), // PDM package folder
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/.renv/**".to_string(), // R environment
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/.cargo/**".to_string(), // Rust cargo cache
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/.gradle/**".to_string(), // Gradle cache
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/.m2/**".to_string(), // Maven repository
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/bower_components/**".to_string(), // Bower components
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/.bundle/**".to_string(), // Ruby bundle
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/packages/**".to_string(), // Common packages folder
+            policy: ExclusionPolicy::Ignore,
+        },
+        // Package lock files
+        ExclusionRule {
+            pattern: "**/package-lock.json".to_string(), // npm
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/yarn.lock".to_string(), // yarn
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/pnpm-lock.yaml".to_string(), // pnpm
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/Cargo.lock".to_string(), // Rust
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/Gemfile.lock".to_string(), // Ruby
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/poetry.lock".to_string(), // Python Poetry
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/composer.lock".to_string(), // PHP
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/go.sum".to_string(), // Go
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/flake.lock".to_string(), // Nix
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/bun.lockb".to_string(), // Bun
+            policy: ExclusionPolicy::Ignore,
+        },
+        // Build directories
+        ExclusionRule {
+            pattern: "**/build/**".to_string(),
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/out/**".to_string(),
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/.next/**".to_string(),
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/.nuxt/**".to_string(),
+            policy: ExclusionPolicy::Ignore,
+        },
+        // Locale directories
+        ExclusionRule {
+            pattern: "**/locale/**".to_string(),
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/locales/**".to_string(),
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/i18n/**".to_string(),
+            policy: ExclusionPolicy::Ignore,
+        },
+        // Other common directories to ignore
+        ExclusionRule {
+            pattern: "**/.idea/**".to_string(),
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/.vscode/**".to_string(),
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/coverage/**".to_string(),
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/__pycache__/**".to_string(),
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/.pytest_cache/**".to_string(),
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/.cache/**".to_string(),
+            policy: ExclusionPolicy::Ignore,
+        },
+        ExclusionRule {
+            pattern: "**/logs/**".to_string(),
+            policy: ExclusionPolicy::Ignore,
+        },
         ExclusionRule {
             pattern: "**/*.min.js".to_string(),
             policy: ExclusionPolicy::Ignore,
@@ -245,8 +449,8 @@ fn default_exclusions() -> Vec<ExclusionRule> {
 }
 
 fn default_true() -> bool { true }
-fn default_threshold() -> f64 { 3.5 }
-fn default_min_length() -> usize { 20 }
+fn default_threshold() -> f64 { 4.8 }
+fn default_min_length() -> usize { 30 }
 
 fn default_max_depth() -> usize {
     1000
