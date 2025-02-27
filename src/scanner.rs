@@ -208,16 +208,13 @@ impl Scanner {
                 eprintln!("Failed to read file {}: {}", path.display(), e);
                 return None;
             }
-        };
 
-        println!("DEBUG: Scanning file: {}", path.display());
+        };
         
         let mut findings = Vec::new();
         let mut ignore_next_line = false;
 
         for (line_num, line) in content.lines().enumerate() {
-            println!("DEBUG: Line {}: {}", line_num + 1, line);
-            
             // Check for ignore comments
             if IGNORE_REGEX.is_match(line) {
                 if line.to_lowercase().contains("ignore-next") {
@@ -243,10 +240,7 @@ impl Scanner {
                     continue;
                 }
                 
-                println!("DEBUG: Checking pattern '{}': {}", name, pattern);
-                                
                 if pattern.is_match(line) {
-                    println!("DEBUG: Found match for pattern '{}' in line: {}", name, line);
                     findings.push(self.create_finding(path, line_num + 1, line, name, description, *severity));
                 }
             }
@@ -486,7 +480,6 @@ fn should_skip_entropy_check(line: &str) -> bool {
 fn extract_potential_secret(line: &str) -> Option<String> {
     // Skip lines that are clearly code and not secrets
     if is_likely_code_not_secret(line) {
-        println!("DEBUG: Skipping line as likely code: {}", line);
         return None;
     }
     
@@ -497,13 +490,11 @@ fn extract_potential_secret(line: &str) -> Option<String> {
             if let Some(end_quote) = aws_key_part.find('\'') {
                 let aws_key = &aws_key_part[0..end_quote];
                 if aws_key.len() >= 20 {
-                    println!("DEBUG: Found AWS key in direct assignment: {}", aws_key);
                     return Some(aws_key.to_string());
                 }
             } else if let Some(end_quote) = aws_key_part.find('"') {
                 let aws_key = &aws_key_part[0..end_quote];
                 if aws_key.len() >= 20 {
-                    println!("DEBUG: Found AWS key in direct assignment: {}", aws_key);
                     return Some(aws_key.to_string());
                 }
             }
@@ -524,7 +515,6 @@ fn extract_potential_secret(line: &str) -> Option<String> {
                 if let Some(end) = fallback_part[start..].find(quote_char) {
                     let quoted = &fallback_part[start..start+end];
                     if quoted.len() >= 30 && quoted.len() <= 50 {
-                        println!("DEBUG: Found AWS secret in direct assignment: {}", quoted);
                         return Some(quoted.to_string());
                     }
                 }
@@ -546,7 +536,6 @@ fn extract_potential_secret(line: &str) -> Option<String> {
                 if let Some(end) = fallback_part[start..].find(quote_char) {
                     let quoted = &fallback_part[start..start+end];
                     if quoted.starts_with("AKIA") {
-                        println!("DEBUG: Found AWS key in fallback pattern: {}", quoted);
                         return Some(quoted.to_string());
                     }
                 }
@@ -571,7 +560,6 @@ fn extract_potential_secret(line: &str) -> Option<String> {
                     if quoted.len() >= 8 && 
                        (quoted.chars().any(|c| c.is_ascii_digit()) || 
                         quoted.chars().any(|c| !c.is_alphanumeric())) {
-                        println!("DEBUG: Found potential secret in fallback pattern: {}", quoted);
                         return Some(quoted.to_string());
                     }
                 }
@@ -586,7 +574,6 @@ fn extract_potential_secret(line: &str) -> Option<String> {
             // Only consider it if it looks like it could be a secret (contains special chars or numbers)
             if quoted.chars().any(|c| c.is_ascii_digit() || !c.is_alphanumeric()) &&
                !is_likely_code_not_secret(quoted) {
-                println!("DEBUG: Found potential secret in double quotes: {}", quoted);
                 return Some(quoted.to_string());
             }
         }
@@ -597,7 +584,6 @@ fn extract_potential_secret(line: &str) -> Option<String> {
             let quoted = &line[start+1..start+1+end];
             if quoted.chars().any(|c| c.is_ascii_digit() || !c.is_alphanumeric()) &&
                !is_likely_code_not_secret(quoted) {
-                println!("DEBUG: Found potential secret in single quotes: {}", quoted);
                 return Some(quoted.to_string());
             }
         }
@@ -608,7 +594,6 @@ fn extract_potential_secret(line: &str) -> Option<String> {
         if let Some(start) = line.find('"') {
             if let Some(end) = line[start+1..].find('"') {
                 let quoted = &line[start+1..start+1+end];
-                println!("DEBUG: Found AWS key in object property: {}", quoted);
                 return Some(quoted.to_string());
             }
         }
@@ -619,7 +604,6 @@ fn extract_potential_secret(line: &str) -> Option<String> {
         if let Some(start) = line.find('"') {
             if let Some(end) = line[start+1..].find('"') {
                 let quoted = &line[start+1..start+1+end];
-                println!("DEBUG: Found secret/password in object property: {}", quoted);
                 return Some(quoted.to_string());
             }
         }
@@ -632,7 +616,6 @@ fn extract_potential_secret(line: &str) -> Option<String> {
         .to_string();
         
     if !clean_line.is_empty() && !is_likely_code_not_secret(&clean_line) {
-        println!("DEBUG: Found potential secret in cleaned line: {}", clean_line);
         Some(clean_line)
     } else {
         None
